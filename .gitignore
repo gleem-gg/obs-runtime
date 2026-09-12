@@ -1,0 +1,2 @@
+# runtime-init is built inside the container image, never from here.
+/init/target
