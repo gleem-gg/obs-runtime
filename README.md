@@ -44,6 +44,15 @@ inherits, and — deliberately — **exits if any component dies**. A rental wit
 a dead streamer is not a degraded rental, it is a black screen the renter is
 being charged for; failing loudly lets the agent report it.
 
+## Licence
+
+Apache-2.0. See `LICENSE`, and `NOTICE` for the attributions it requires.
+
+That covers Gleem's own contributions — the Containerfile and `runtime-init`.
+The programs the image assembles keep their own licences; the image is an
+aggregation of separately licensed software, not a combined work, and none of
+their copyleft reaches this repository.
+
 ## Third-party code and licensing
 
 Read this before shipping the image or vendoring the client.

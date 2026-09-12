@@ -120,7 +120,7 @@ RUN mkdir -p /usr/share/doc/selkies \
         "https://raw.githubusercontent.com/selkies-project/selkies/v${SELKIES_VERSION}/LICENSE" \
     && cp /usr/share/doc/selkies/LICENSE /opt/selkies-web/LICENSE
 
-COPY NOTICE /usr/share/doc/gleem-obs-runtime/NOTICE
+COPY LICENSE NOTICE /usr/share/doc/gleem-obs-runtime/
 
 COPY --from=init-build /build/target/release/runtime-init /usr/local/bin/runtime-init
 

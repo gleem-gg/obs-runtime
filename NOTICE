@@ -1,5 +1,11 @@
-Gleem OBS Runtime — third-party notices
-=======================================
+Gleem OBS Runtime
+Copyright 2026 René Preuß
+
+This product includes software developed for Gleem, licensed under the
+Apache License, Version 2.0. See LICENSE.
+
+Third-party notices
+===================
 
 This image is an aggregation of separately licensed programs. Nothing here is
 statically linked into anything else: OBS, GStreamer and Selkies are separate
