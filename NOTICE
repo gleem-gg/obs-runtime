@@ -1,0 +1,63 @@
+Gleem OBS Runtime — third-party notices
+=======================================
+
+This image is an aggregation of separately licensed programs. Nothing here is
+statically linked into anything else: OBS, GStreamer and Selkies are separate
+processes started by runtime-init, which is Gleem's own code.
+
+Where the licences are
+----------------------
+
+Every Debian package in this image carries its own licence at
+/usr/share/doc/<package>/copyright — 573 of them at the time of writing,
+including obs-studio. `dpkg-query -W` lists what is installed.
+
+Two payloads are not Debian packages and are therefore called out here:
+
+  /opt/selkies       Selkies, MPL-2.0     licence at /usr/share/doc/selkies/LICENSE
+  /opt/selkies-web   Selkies, MPL-2.0     licence at /opt/selkies-web/LICENSE
+
+Within the web bundle, lib/guacamole-keyboard-selkies.js is Apache-2.0 from
+Apache Guacamole and carries its own header and an upstream modification note.
+
+Obtaining source
+----------------
+
+Every GPL- and LGPL-licensed component in this image is an **unmodified binary
+package from Debian trixie**. Gleem has patched none of them. Their complete
+corresponding source is published by Debian and can be fetched for any package
+in this image with:
+
+    apt-get source <package>
+
+against the Debian trixie archive, or browsed at https://sources.debian.org/.
+
+For anyone who cannot use that route, Gleem will provide the complete
+corresponding source for any GPL- or LGPL-licensed component of this image on
+request, for no more than the cost of distribution, for three years from the
+date this image was distributed. Contact: hello@ghostzero.de.
+
+Notable components
+------------------
+
+  OBS Studio            GPL-2.0-or-later   executed as a separate process
+  GStreamer + plugins   LGPL-2.1 and mixed  see each package's copyright file
+  Selkies               MPL-2.0             file-level copyleft
+  Apache Guacamole      Apache-2.0          keyboard mapping only
+  Debian base system    mixed               see each package's copyright file
+
+Gleem's own contributions to this image — the Containerfile and runtime-init —
+are covered by the repository's own licence.
+
+Modifying anything here
+-----------------------
+
+MPL-2.0 is file-level copyleft: a modified Selkies file must stay MPL-2.0 and
+its source must be made available. That is the whole obligation — it does not
+reach Gleem's own files, even in the same image. Files are kept byte-identical
+to upstream precisely so this stays a non-issue; see the note in the vendored
+web client's README.
+
+Patching OBS, GStreamer or any other GPL component and shipping the result
+would put those changes under the GPL and require publishing them. Nothing in
+this image is patched today.

@@ -109,6 +109,19 @@ RUN curl -fsSL "${SELKIES_RELEASE}/selkies-gstreamer-web_v${SELKIES_VERSION}.tar
     && tar -xzf /tmp/selkies-web.tar.gz -C /opt/selkies-web --strip-components=1 \
     && rm /tmp/selkies-web.tar.gz
 
+# Selkies ships neither the Python package nor the web bundle with its licence,
+# and MPL-2.0 requires the licence to travel with the code. Every Debian
+# package in this image carries its own /usr/share/doc/<pkg>/copyright; these
+# two are the only payloads dpkg knows nothing about, so they are the only ones
+# that need saying out loud. Pinned to the same tag as the code above, so a
+# version bump cannot leave the licence describing a different release.
+RUN mkdir -p /usr/share/doc/selkies \
+    && curl -fsSL -o /usr/share/doc/selkies/LICENSE \
+        "https://raw.githubusercontent.com/selkies-project/selkies/v${SELKIES_VERSION}/LICENSE" \
+    && cp /usr/share/doc/selkies/LICENSE /opt/selkies-web/LICENSE
+
+COPY NOTICE /usr/share/doc/gleem-obs-runtime/NOTICE
+
 COPY --from=init-build /build/target/release/runtime-init /usr/local/bin/runtime-init
 
 # Everything a rental may write that outlives it goes here, and this is the

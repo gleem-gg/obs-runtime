@@ -66,9 +66,21 @@ Apache Guacamole, carrying a noted local modification.
 **OBS Studio is GPL-2.0**, but it is executed rather than linked, which is the
 ordinary aggregation case for a container image.
 
-None of this blocks anything. It does mean the image is not simply "ours to
-publish however", and the answer should be written down before it is pushed
-anywhere public.
+None of this blocks anything, and as of now none of it is outstanding: the
+answer is written down in `NOTICE`, which ships inside the image at
+`/usr/share/doc/gleem-obs-runtime/NOTICE`.
+
+What was actually missing was smaller and more specific than the list above
+suggests. Every Debian package in the image already carries its own
+`/usr/share/doc/<package>/copyright` — 573 of them, obs-studio included — so
+the GPL and LGPL licences travel with the image without anyone doing anything.
+The two payloads dpkg knows nothing about, `/opt/selkies` and
+`/opt/selkies-web`, shipped with **no licence file at all**, which MPL-2.0
+does not allow. Both now carry it, fetched at the pinned `SELKIES_VERSION` so
+a bump cannot leave the licence describing a different release.
+
+Source for the GPL and LGPL components is Debian's, unmodified; `NOTICE`
+records that and carries the written offer.
 
 ## Building
 
