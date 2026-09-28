@@ -85,8 +85,9 @@ suggests. Every Debian package in the image already carries its own
 the GPL and LGPL licences travel with the image without anyone doing anything.
 The two payloads dpkg knows nothing about, `/opt/selkies` and
 `/opt/selkies-web`, shipped with **no licence file at all**, which MPL-2.0
-does not allow. Both now carry it, fetched at the pinned `SELKIES_VERSION` so
-a bump cannot leave the licence describing a different release.
+does not allow. Both now carry it, copied from `vendor/selkies/` alongside the
+code it covers, so a bump cannot leave the licence describing a different
+release.
 
 Source for the GPL and LGPL components is Debian's, unmodified; `NOTICE`
 records that and carries the written offer.
@@ -97,10 +98,18 @@ records that and carries the written offer.
 podman build -t localhost/gleem-obs-runtime:dev -f Containerfile .
 ```
 
-The Selkies version is pinned by `ARG SELKIES_VERSION`. Its signalling shape
-moves between releases, so bumping it is a deliberate, tested action — the
-agent relays those messages verbatim and will happily forward a protocol the
-browser no longer understands.
+Selkies is vendored in `vendor/selkies/` (the wheel, the web bundle and the
+licence) and named by `ARG SELKIES_VERSION`. It is vendored rather than
+downloaded because upstream deleted every 1.x release and tag on 2026-09-23;
+`vendor/selkies/README.md` records where the files came from. Its signalling
+shape moves between releases, so bumping it is a deliberate, tested action —
+the agent relays those messages verbatim and will happily forward a protocol
+the browser no longer understands. A bump means replacing all three vendored
+files and the `ARG` together.
+
+The image is published to `ghcr.io/gleem-gg/obs-runtime` by the Publish
+workflow on every push to `main`. The run's summary prints the manifest
+digest, which is what production pins through `HOSTING_RUNTIME_DIGEST`.
 
 ## Running it by hand
 

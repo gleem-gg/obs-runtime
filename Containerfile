@@ -33,10 +33,22 @@ COPY init/src ./src
 RUN cargo build --release --locked
 
 
+# The vendored Selkies files, staged as an image layer so the build can mount
+# them without copying them into the final image. A bind mount straight from
+# the build context would do the same, but under rootless podman on an SELinux
+# host it arrives unreadable, and the option that fixes that is podman-only.
+FROM scratch AS selkies
+COPY vendor/selkies /
+
+
 FROM docker.io/library/debian:trixie
 
+# Selkies comes from vendor/selkies/, not from upstream. On 2026-09-23 the
+# Selkies project deleted every 1.x release and tag, so the wheel and web
+# bundle this image was verified with no longer exist anywhere but here. The
+# wheel is pure Python, which makes the vendored copy the source as well; see
+# vendor/selkies/README.md for where it came from.
 ARG SELKIES_VERSION=1.6.2
-ARG SELKIES_RELEASE=https://github.com/selkies-project/selkies/releases/download/v1.6.2
 
 ENV DEBIAN_FRONTEND=noninteractive \
     DISPLAY=:0 \
@@ -81,7 +93,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # setuptools is not incidental: one of Selkies' dependencies still imports
 # `distutils`, which Python 3.12 removed, and setuptools is what puts the
 # shim back.
-RUN apt-get update \
+RUN --mount=type=bind,from=selkies,target=/tmp/selkies \
+    apt-get update \
     && apt-get install -y --no-install-recommends build-essential python3-dev linux-libc-dev \
     && python3 -m venv --system-site-packages /opt/selkies \
     && /opt/selkies/bin/pip install --no-cache-dir \
@@ -93,7 +106,7 @@ RUN apt-get update \
         # register and the pipeline dies mid-negotiation. The wheel ships the
         # one library needed, at a fraction of the toolkit's size.
         nvidia-cuda-nvrtc-cu12 \
-        "${SELKIES_RELEASE}/selkies_gstreamer-${SELKIES_VERSION}-py3-none-any.whl" \
+        "/tmp/selkies/selkies_gstreamer-${SELKIES_VERSION}-py3-none-any.whl" \
     # The wheel ships libnvrtc.so.12; GStreamer dlopens the bare SONAME.
     && ln -sf /opt/selkies/lib/python3.13/site-packages/nvidia/cuda_nvrtc/lib/libnvrtc.so.12 \
               /opt/selkies/lib/python3.13/site-packages/nvidia/cuda_nvrtc/lib/libnvrtc.so \
@@ -103,22 +116,22 @@ RUN apt-get update \
 
 # The web client. Served to the browser by Gleem, not from here — this copy is
 # what the version pin is anchored to, so client and server cannot drift.
-RUN curl -fsSL "${SELKIES_RELEASE}/selkies-gstreamer-web_v${SELKIES_VERSION}.tar.gz" \
-        -o /tmp/selkies-web.tar.gz \
-    && mkdir -p /opt/selkies-web \
-    && tar -xzf /tmp/selkies-web.tar.gz -C /opt/selkies-web --strip-components=1 \
-    && rm /tmp/selkies-web.tar.gz
+RUN --mount=type=bind,from=selkies,target=/tmp/selkies \
+    mkdir -p /opt/selkies-web \
+    && tar -xzf "/tmp/selkies/selkies-gstreamer-web_v${SELKIES_VERSION}.tar.gz" \
+        -C /opt/selkies-web --strip-components=1
 
 # Selkies ships neither the Python package nor the web bundle with its licence,
 # and MPL-2.0 requires the licence to travel with the code. Every Debian
 # package in this image carries its own /usr/share/doc/<pkg>/copyright; these
 # two are the only payloads dpkg knows nothing about, so they are the only ones
-# that need saying out loud. Pinned to the same tag as the code above, so a
-# version bump cannot leave the licence describing a different release.
-RUN mkdir -p /usr/share/doc/selkies \
-    && curl -fsSL -o /usr/share/doc/selkies/LICENSE \
-        "https://raw.githubusercontent.com/selkies-project/selkies/v${SELKIES_VERSION}/LICENSE" \
-    && cp /usr/share/doc/selkies/LICENSE /opt/selkies-web/LICENSE
+# that need saying out loud. It lives next to the code it covers in
+# vendor/selkies/, so a version bump replaces all three files together and
+# cannot leave the licence describing a different release.
+RUN --mount=type=bind,from=selkies,target=/tmp/selkies \
+    mkdir -p /usr/share/doc/selkies \
+    && cp /tmp/selkies/LICENSE /usr/share/doc/selkies/LICENSE \
+    && cp /tmp/selkies/LICENSE /opt/selkies-web/LICENSE
 
 COPY LICENSE NOTICE /usr/share/doc/gleem-obs-runtime/
 

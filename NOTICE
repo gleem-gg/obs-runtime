@@ -26,6 +26,12 @@ Two payloads are not Debian packages and are therefore called out here:
 Within the web bundle, lib/guacamole-keyboard-selkies.js is Apache-2.0 from
 Apache Guacamole and carries its own header and an upstream modification note.
 
+Both Selkies payloads are installed from vendor/selkies/ in the obs-runtime
+repository, because the Selkies project removed its 1.x releases and tags on
+2026-09-23. The Python package is pure Python and the web bundle is unminified
+JavaScript, so the vendored files are the source form as well as the binary;
+vendor/selkies/README.md records their provenance.
+
 Obtaining source
 ----------------
 
