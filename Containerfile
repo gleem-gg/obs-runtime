@@ -41,7 +41,7 @@ FROM scratch AS selkies
 COPY vendor/selkies /
 
 
-FROM docker.io/library/debian:trixie
+FROM docker.io/library/debian:trixie AS rootfs
 
 # Selkies comes from vendor/selkies/, not from upstream. On 2026-09-23 the
 # Selkies project deleted every 1.x release and tag, so the wheel and web
@@ -50,12 +50,7 @@ FROM docker.io/library/debian:trixie
 # vendor/selkies/README.md for where it came from.
 ARG SELKIES_VERSION=1.6.2
 
-ENV DEBIAN_FRONTEND=noninteractive \
-    DISPLAY=:0 \
-    PULSE_SERVER=unix:/run/pulse/native \
-    GLEEM_RESOLUTION=1920x1080 \
-    GLEEM_FRAMERATE=30 \
-    GLEEM_ENCODER=nvh264enc
+ENV DEBIAN_FRONTEND=noninteractive
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
         # The display: a virtual X server and just enough window manager that
@@ -142,6 +137,35 @@ COPY --from=init-build /build/target/release/runtime-init /usr/local/bin/runtime
 RUN mkdir -p /workspace /run/pulse \
         /root/.config/obs-studio/basic/scenes /root/.config/obs-studio/basic/profiles \
     && chmod 0777 /workspace
+
+# No setuid or setgid binaries. Nothing in this image runs as one user and
+# needs to become another: su, passwd, mount and the rest arrive with the base
+# system and would only ever serve a renter poking at the desktop. Stripping
+# them is also what lets the agent pull the image at all. Its service unit
+# sets RestrictSUIDSGID, so the kernel refuses to create such a file while
+# podman unpacks a layer:
+#
+#   unpacking failed (error: exit status 1; output:
+#   open /usr/bin/chage: operation not permitted)
+#
+# The bits have to go from every layer, not just the last, which is why the
+# whole tree is flattened into the final stage below.
+RUN find / -xdev -type f -perm /6000 -exec chmod a-s {} +
+
+
+# The image hosts pull: one layer holding the finished tree, so the base
+# image's setuid files never appear in any layer's tar. Metadata does not
+# survive a `FROM scratch`, so everything a container needs at runtime is
+# declared here rather than in the build stage.
+FROM scratch
+
+COPY --from=rootfs / /
+
+ENV DISPLAY=:0 \
+    PULSE_SERVER=unix:/run/pulse/native \
+    GLEEM_RESOLUTION=1920x1080 \
+    GLEEM_FRAMERATE=30 \
+    GLEEM_ENCODER=nvh264enc
 
 # Loopback only in practice: the agent publishes this on 127.0.0.1 and nothing
 # outside the machine can address it.
