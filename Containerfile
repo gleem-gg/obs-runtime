@@ -281,10 +281,9 @@ RUN mkdir -p /workspace /run/pulse \
 # Configuration files, such as fontconfig picking up the workspace's fonts.
 COPY rootfs/ /
 
-# Openbox's stock rc.xml carries the key and mouse bindings that make windows
-# movable at all, so the Gleem rules are added to it rather than replacing it.
-RUN sed -i '/<applications>/r /etc/gleem/openbox-applications.xml' /etc/xdg/openbox/rc.xml \
-    && grep -q 'title="OBS \*"' /etc/xdg/openbox/rc.xml
+# The Dracula-withoutBorder theme and the window rules, edited into openbox's
+# stock rc.xml (see the script for why it is edited rather than replaced).
+RUN /usr/lib/gleem/configure-openbox
 
 # No setuid or setgid binaries. Nothing in this image runs as one user and
 # needs to become another: su, passwd, mount and the rest arrive with the base

@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Gleem opens no openbox menus (see /usr/lib/gleem/configure-openbox). The
+     stock file built one from the Debian menu, which is not installed and
+     only produced a warning at every start. -->
+<openbox_menu xmlns="http://openbox.org/3.4/menu">
+</openbox_menu>

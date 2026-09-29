@@ -1,6 +1,6 @@
-  <!-- Merged into openbox's rc.xml at build time. OBS's main window fills the
-       desktop; its dialogs share the class but not the title, so they still
-       open as ordinary floating windows. -->
+  <!-- Merged into openbox's rc.xml at build time. OBS's main window opens as
+       an ordinary window, not maximized, so the renter can move and resize
+       it; its dialogs share the class but not the title. -->
   <application class="obs" type="normal" title="OBS *">
-    <maximized>yes</maximized>
+    <maximized>no</maximized>
   </application>

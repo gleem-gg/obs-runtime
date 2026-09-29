@@ -55,6 +55,15 @@ https://github.com/gleem-gg/obs-irl-control at the commit the Containerfile
 pins (IRL_CONTROL_COMMIT). That repository is its complete corresponding
 source.
 
+One openbox theme is not a Debian package either:
+
+  /usr/share/themes/Dracula-withoutBorder
+                     Dracula for Openbox, MIT, (c) 2020 César Salazar
+                     licence at /usr/share/doc/dracula-openbox/LICENSE
+                     from https://github.com/dracula/openbox at commit
+                     489fdb58400db74e48369d0c67e808bedf65865f; its
+                     openbox-3 files, unmodified
+
 Within the web bundle, lib/guacamole-keyboard-selkies.js is Apache-2.0 from
 Apache Guacamole and carries its own header and an upstream modification note.
 

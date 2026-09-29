@@ -4,6 +4,7 @@
 #
 #   scripts/run-local                  newest published image
 #   scripts/run-local --build          build this checkout first
+#   scripts/run-local --overlay        this checkout's rootfs/ on the published image
 #   scripts/run-local --workspace DIR  mount DIR as /workspace (a saved setup)
 #   scripts/run-local --stop           stop and remove the container
 #
@@ -13,12 +14,14 @@ set -euo pipefail
 NAME=gleem-obs-local
 IMAGE=ghcr.io/gleem-gg/obs-runtime:latest
 DEV_IMAGE=localhost/gleem-obs-runtime:dev
+OVERLAY_IMAGE=localhost/gleem-obs-runtime:overlay
 RESOLUTION=1920x1080
 FRAMERATE=30
 PORT=8082
 WS_PORT=4455
 WORKSPACE=
 BUILD=0
+OVERLAY=0
 OPEN=1
 
 usage() {
@@ -26,6 +29,9 @@ usage() {
     cat <<EOF
 Options:
   --build             build $DEV_IMAGE from this checkout and run it
+  --overlay           copy this checkout's rootfs/ onto IMAGE and redo the
+                      openbox setup: seconds instead of a full build, for
+                      changes under rootfs/ only (not init/ or packages)
   --image IMAGE       run IMAGE (default: $IMAGE, pulled when newer)
   --resolution WxH    default: $RESOLUTION
   --fps N             default: $FRAMERATE
@@ -40,6 +46,7 @@ EOF
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --build) BUILD=1 ;;
+        --overlay) OVERLAY=1 ;;
         --image) IMAGE=$2; shift ;;
         --resolution) RESOLUTION=$2; shift ;;
         --fps) FRAMERATE=$2; shift ;;
@@ -59,6 +66,14 @@ cd "$(dirname "$0")/.."
 if [[ $BUILD == 1 ]]; then
     podman build -t "$DEV_IMAGE" -f Containerfile .
     IMAGE=$DEV_IMAGE
+    PULL=never
+elif [[ $OVERLAY == 1 ]]; then
+    podman build --pull=newer -t "$OVERLAY_IMAGE" -f - rootfs <<EOF
+FROM $IMAGE
+COPY . /
+RUN /usr/lib/gleem/configure-openbox
+EOF
+    IMAGE=$OVERLAY_IMAGE
     PULL=never
 else
     PULL=newer
