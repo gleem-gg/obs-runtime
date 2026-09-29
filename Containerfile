@@ -176,10 +176,15 @@ RUN --mount=type=bind,from=irl-control,source=/libobs-version,target=/tmp/libobs
     test "$(dpkg-query -W -f='${Version}' obs-studio)" = "$(cat /tmp/libobs-version)"
 
 # Everything a rental may write that outlives it goes here, and this is the
-# only path bind-mounted from the host's encrypted workspace.
+# only path bind-mounted from the host's encrypted workspace. OBS keeps its
+# configuration under /workspace/config and scenes use media and fonts from
+# /workspace/media; runtime-init creates both at start, since the mount hides
+# anything created here.
 RUN mkdir -p /workspace /run/pulse \
-        /root/.config/obs-studio/basic/scenes /root/.config/obs-studio/basic/profiles \
     && chmod 0777 /workspace
+
+# Configuration files, such as fontconfig picking up the workspace's fonts.
+COPY rootfs/ /
 
 # No setuid or setgid binaries. Nothing in this image runs as one user and
 # needs to become another: su, passwd, mount and the rest arrive with the base
