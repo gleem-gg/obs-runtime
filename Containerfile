@@ -92,6 +92,12 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         pulseaudio pulseaudio-utils \
         # OBS itself. obs-websocket has been built in since OBS 28.
         obs-studio \
+        # Qt's SVG image and icon plugins. OBS's themes draw checkbox ticks
+        # and the arrows on combo and spin boxes from SVGs; without these they
+        # render blank, so a checkbox cannot be seen or ticked. Only a
+        # Recommends of the Qt SVG library, so --no-install-recommends drops
+        # them.
+        qt6-svg-plugins \
         # GStreamer 1.26 from the distribution. nvcodec — and therefore a
         # working nvh264enc — is in plugins-bad; webrtcbin needs libnice for
         # ICE, which is packaged separately.
