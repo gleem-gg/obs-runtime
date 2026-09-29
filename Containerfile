@@ -41,6 +41,35 @@ FROM scratch AS selkies
 COPY vendor/selkies /
 
 
+# OBS IRL Control, Gleem's own plugin (GPL-2.0-or-later), built here against
+# the very libobs the image ships: a plugin built against a different OBS
+# release can load and then crash, and a crash takes the rental down.
+#
+# Pinned by commit rather than tag, so a moved tag cannot change what runs on
+# somebody else's hardware. Bump both together.
+FROM docker.io/library/debian:trixie AS irl-control
+
+ARG IRL_CONTROL_VERSION=1.2.0
+ARG IRL_CONTROL_COMMIT=e915dc69c5cc1a5743aa4f68be10f40a5464b40d
+
+ENV DEBIAN_FRONTEND=noninteractive
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        build-essential cmake ninja-build git ca-certificates \
+        libobs-dev qt6-base-dev libcurl4-openssl-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN git clone --quiet https://github.com/gleem-gg/obs-irl-control.git /src \
+    && git -C /src checkout --quiet --detach "$IRL_CONTROL_COMMIT" \
+    && grep -q "VERSION $IRL_CONTROL_VERSION " /src/CMakeLists.txt \
+    && cmake -S /src -B /build -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=/usr \
+    && cmake --build /build \
+    && DESTDIR=/out cmake --install /build \
+    && install -Dm644 /src/LICENSE /out/usr/share/doc/obs-irl-control/LICENSE \
+    # Checked against the OBS the runtime installs, below.
+    && dpkg-query -W -f='${Version}' libobs-dev > /libobs-version
+
+
 FROM docker.io/library/debian:trixie AS rootfs
 
 # Selkies comes from vendor/selkies/, not from upstream. On 2026-09-23 the
@@ -131,6 +160,13 @@ RUN --mount=type=bind,from=selkies,target=/tmp/selkies \
 COPY LICENSE NOTICE /usr/share/doc/gleem-obs-runtime/
 
 COPY --from=init-build /build/target/release/runtime-init /usr/local/bin/runtime-init
+
+# OBS IRL Control. Refuses to build an image whose OBS is not the one the
+# plugin was compiled against, which could otherwise happen if the Debian
+# mirror moved between the two stages.
+COPY --from=irl-control /out/ /
+RUN --mount=type=bind,from=irl-control,source=/libobs-version,target=/tmp/libobs-version \
+    test "$(dpkg-query -W -f='${Version}' obs-studio)" = "$(cat /tmp/libobs-version)"
 
 # Everything a rental may write that outlives it goes here, and this is the
 # only path bind-mounted from the host's encrypted workspace.
