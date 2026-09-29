@@ -398,8 +398,27 @@ fn prepare_workspace(config_home: &Path, media: &Path) -> std::io::Result<()> {
         std::fs::write(&global, "[General]\nFirstRun=true\n")?;
     }
 
+    // obs-websocket's server, on for every rental: renters connect their own
+    // tools to it through Gleem's gateway. --websocket_port and
+    // --websocket_password only override those two settings; with
+    // server_enabled left at its default of false the server never starts.
+    // Written fresh each time, since it is the platform's setting, not the
+    // renter's, and the password on the command line wins over this one.
+    let websocket = obs.join("plugin_config/obs-websocket");
+    std::fs::create_dir_all(&websocket)?;
+    std::fs::write(websocket.join("config.json"), OBS_WEBSOCKET_CONFIG)?;
+
     Ok(())
 }
+
+const OBS_WEBSOCKET_CONFIG: &str = r#"{
+  "alerts_enabled": false,
+  "auth_required": true,
+  "first_load": false,
+  "server_enabled": true,
+  "server_port": 4455
+}
+"#;
 
 const SIGINT: i32 = 2;
 const SIGTERM: i32 = 15;
@@ -484,6 +503,11 @@ mod tests {
         assert!(root.join("config/obs-studio/basic/scenes").is_dir());
         assert!(root.join("config/obs-studio/basic/profiles").is_dir());
         assert!(root.join("media/fonts").is_dir());
+        assert!(
+            std::fs::read_to_string(root.join("config/obs-studio/plugin_config/obs-websocket/config.json"))
+                .unwrap()
+                .contains(r#""server_enabled": true"#)
+        );
         assert_eq!(
             std::fs::read_to_string(root.join("config/obs-studio/global.ini")).unwrap(),
             "[General]\nFirstRun=true\n"
