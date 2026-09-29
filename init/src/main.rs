@@ -6,13 +6,32 @@
 //! that a component dying takes the container with it, rather than leaving a
 //! rental that looks alive but has no desktop behind it.
 
+use std::path::Path;
 use std::process::{Child, Command, Stdio};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread;
 use std::time::{Duration, Instant};
 
 /// How long the X server gets to accept connections before we give up. A slow
 /// machine under load can take a few seconds; a minute means it is broken.
 const X_TIMEOUT: Duration = Duration::from_secs(60);
+
+/// How long OBS gets to save and exit after being asked to stop. It saved and
+/// exited in well under ten seconds when measured; podman's stop timeout has
+/// to be longer than this, or OBS is killed mid-save.
+const OBS_STOP_TIMEOUT: Duration = Duration::from_secs(20);
+
+/// Where OBS keeps its configuration: on the encrypted workspace, the only
+/// place that outlives the container, so a renter's setup can be saved when
+/// the rental ends and restored into the next one.
+const OBS_CONFIG_HOME: &str = "/workspace/config";
+
+/// Media and fonts a renter's scenes use. Fontconfig is pointed at the fonts
+/// directory by /etc/fonts/conf.d/60-gleem-workspace.conf.
+const WORKSPACE_MEDIA: &str = "/workspace/media";
+
+/// Set by the signal handler when the container is asked to stop.
+static STOP_REQUESTED: AtomicBool = AtomicBool::new(false);
 
 struct Service {
     name: &'static str,
@@ -28,7 +47,16 @@ fn main() -> std::process::ExitCode {
 
     // Taken out of the environment before anything is spawned, so only OBS
     // gets them and nothing else inherits them by accident.
-    let obs_env = take_obs_only_env();
+    let mut obs_env = take_obs_only_env();
+    obs_env.push(("XDG_CONFIG_HOME", OBS_CONFIG_HOME.to_string()));
+
+    // As PID 1, a signal with no handler is ignored. Without this, `podman
+    // stop` waits out its timeout and then kills OBS without a chance to save.
+    install_stop_handlers();
+
+    if let Err(error) = prepare_workspace(Path::new(OBS_CONFIG_HOME), Path::new(WORKSPACE_MEDIA)) {
+        log(&format!("could not prepare the workspace ({error}); OBS may start without a saved setup"));
+    }
 
     let mut services: Vec<Service> = Vec::new();
 
@@ -132,8 +160,8 @@ fn wait_for_audio() {
 }
 
 fn obs_arguments() -> Vec<String> {
-    // OBS writes its profile and scene collection under $HOME and fails
-    // noisily if it cannot.
+    // OBS itself is pointed at the workspace through XDG_CONFIG_HOME, but
+    // other things it loads still expect a HOME.
     if std::env::var_os("HOME").is_none() {
         unsafe { std::env::set_var("HOME", "/root") };
     }
@@ -267,6 +295,12 @@ fn spawn_with_env(
 /// being charged for. Better it fails visibly so the agent can report it.
 fn supervise(services: &mut [Service]) -> std::process::ExitCode {
     loop {
+        if STOP_REQUESTED.load(Ordering::SeqCst) {
+            log("asked to stop; letting OBS save first");
+            stop_gracefully(services);
+            return std::process::ExitCode::SUCCESS;
+        }
+
         for service in services.iter_mut() {
             match service.child.try_wait() {
                 Ok(Some(status)) => {
@@ -282,7 +316,77 @@ fn supervise(services: &mut [Service]) -> std::process::ExitCode {
         }
 
         reap_orphans();
-        thread::sleep(Duration::from_secs(2));
+        // Short, so a stop request is acted on promptly: every moment spent
+        // here comes out of podman's stop timeout.
+        thread::sleep(Duration::from_millis(250));
+    }
+}
+
+/// Stop OBS the way it saves on the way out, then everything else.
+///
+/// OBS 30 has no SIGTERM handler, so the signal podman sends kills it before
+/// it writes the scene collection and profile. SIGINT it handles: it closes
+/// the main window, saves and exits 0. Measured in this image, not assumed.
+fn stop_gracefully(services: &mut [Service]) {
+    if let Some(obs) = services.iter_mut().find(|service| service.name == "obs") {
+        // SAFETY: kill(2) on a pid this process spawned and has not reaped.
+        unsafe { raw_kill(obs.child.id() as i32, SIGINT) };
+
+        let deadline = Instant::now() + OBS_STOP_TIMEOUT;
+        loop {
+            match obs.child.try_wait() {
+                Ok(Some(status)) => {
+                    log(&format!("obs exited ({status})"));
+                    break;
+                }
+                Ok(None) if Instant::now() < deadline => thread::sleep(Duration::from_millis(100)),
+                _ => {
+                    log("obs did not exit in time; killing it");
+                    break;
+                }
+            }
+        }
+    }
+
+    shutdown(services);
+}
+
+/// Make sure OBS's configuration and the media directories exist on the
+/// workspace, and that OBS will not open its first-run wizard: nobody is at
+/// this desktop to dismiss it, and it would be the first thing a renter saw.
+///
+/// `--disable-updater` does not suppress the wizard. OBS runs it when
+/// `[General] FirstRun` is missing from global.ini, so a fresh workspace gets
+/// a global.ini that says the first run is over. An existing one, restored
+/// from the renter's saved setup, is left alone.
+fn prepare_workspace(config_home: &Path, media: &Path) -> std::io::Result<()> {
+    let obs = config_home.join("obs-studio");
+
+    std::fs::create_dir_all(obs.join("basic/scenes"))?;
+    std::fs::create_dir_all(obs.join("basic/profiles"))?;
+    std::fs::create_dir_all(media.join("fonts"))?;
+
+    let global = obs.join("global.ini");
+    if !global.exists() {
+        std::fs::write(&global, "[General]\nFirstRun=true\n")?;
+    }
+
+    Ok(())
+}
+
+const SIGINT: i32 = 2;
+const SIGTERM: i32 = 15;
+
+extern "C" fn request_stop(_signal: i32) {
+    // Only an atomic store: nothing else is safe in a signal handler.
+    STOP_REQUESTED.store(true, Ordering::SeqCst);
+}
+
+fn install_stop_handlers() {
+    // SAFETY: signal(2) with a handler that only stores to an atomic.
+    unsafe {
+        raw_signal(SIGTERM, request_stop);
+        raw_signal(SIGINT, request_stop);
     }
 }
 
@@ -303,6 +407,12 @@ fn reap_orphans() {
 unsafe extern "C" {
     #[link_name = "waitpid"]
     fn raw_waitpid(pid: i32, status: *mut i32, options: i32) -> i32;
+
+    #[link_name = "kill"]
+    fn raw_kill(pid: i32, signal: i32) -> i32;
+
+    #[link_name = "signal"]
+    fn raw_signal(signal: i32, handler: extern "C" fn(i32)) -> usize;
 }
 
 unsafe fn libc_waitpid() -> i32 {
@@ -336,6 +446,41 @@ fn log(message: &str) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn prepares_a_fresh_workspace_without_the_first_run_wizard() {
+        let root = std::env::temp_dir().join(format!("runtime-init-test-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+
+        prepare_workspace(&root.join("config"), &root.join("media")).unwrap();
+
+        assert!(root.join("config/obs-studio/basic/scenes").is_dir());
+        assert!(root.join("config/obs-studio/basic/profiles").is_dir());
+        assert!(root.join("media/fonts").is_dir());
+        assert_eq!(
+            std::fs::read_to_string(root.join("config/obs-studio/global.ini")).unwrap(),
+            "[General]\nFirstRun=true\n"
+        );
+
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn leaves_a_restored_global_ini_alone() {
+        let root = std::env::temp_dir().join(format!("runtime-init-restored-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(root.join("config/obs-studio")).unwrap();
+        std::fs::write(root.join("config/obs-studio/global.ini"), "[General]\nFirstRun=true\nLanguage=de-DE\n").unwrap();
+
+        prepare_workspace(&root.join("config"), &root.join("media")).unwrap();
+
+        assert_eq!(
+            std::fs::read_to_string(root.join("config/obs-studio/global.ini")).unwrap(),
+            "[General]\nFirstRun=true\nLanguage=de-DE\n"
+        );
+
+        std::fs::remove_dir_all(&root).unwrap();
+    }
 
     #[test]
     fn hands_the_api_token_to_obs_alone() {
