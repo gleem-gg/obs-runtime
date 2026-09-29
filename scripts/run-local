@@ -1,0 +1,129 @@
+#!/usr/bin/env bash
+# Run the runtime on this machine, the way a rental does, and open it in the
+# browser. Needs podman and an NVIDIA GPU exposed through CDI.
+#
+#   scripts/run-local                  newest published image
+#   scripts/run-local --build          build this checkout first
+#   scripts/run-local --overlay        this checkout's rootfs/ on the published image
+#   scripts/run-local --workspace DIR  mount DIR as /workspace (a saved setup)
+#   scripts/run-local --stop           stop and remove the container
+#
+# See --help for the rest.
+set -euo pipefail
+
+NAME=gleem-obs-local
+IMAGE=ghcr.io/gleem-gg/obs-runtime:latest
+DEV_IMAGE=localhost/gleem-obs-runtime:dev
+OVERLAY_IMAGE=localhost/gleem-obs-runtime:overlay
+RESOLUTION=1920x1080
+FRAMERATE=30
+PORT=8082
+WS_PORT=4455
+WORKSPACE=
+BUILD=0
+OVERLAY=0
+OPEN=1
+
+usage() {
+    sed -n '2,10p' "$0" | sed 's/^# \{0,1\}//'
+    cat <<EOF
+Options:
+  --build             build $DEV_IMAGE from this checkout and run it
+  --overlay           copy this checkout's rootfs/ onto IMAGE and redo the
+                      openbox setup: seconds instead of a full build, for
+                      changes under rootfs/ only (not init/ or packages)
+  --image IMAGE       run IMAGE (default: $IMAGE, pulled when newer)
+  --resolution WxH    default: $RESOLUTION
+  --fps N             default: $FRAMERATE
+  --port PORT         Selkies on 127.0.0.1:PORT (default: $PORT)
+  --ws-port PORT      obs-websocket on 127.0.0.1:PORT (default: $WS_PORT)
+  --workspace DIR     mount DIR as /workspace instead of an empty one
+  --no-open           don't open the browser
+  --stop              stop and remove the container, then exit
+EOF
+}
+
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --build) BUILD=1 ;;
+        --overlay) OVERLAY=1 ;;
+        --image) IMAGE=$2; shift ;;
+        --resolution) RESOLUTION=$2; shift ;;
+        --fps) FRAMERATE=$2; shift ;;
+        --port) PORT=$2; shift ;;
+        --ws-port) WS_PORT=$2; shift ;;
+        --workspace) WORKSPACE=$(realpath "$2"); shift ;;
+        --no-open) OPEN=0 ;;
+        --stop) podman rm -f --ignore "$NAME" >/dev/null; echo "Stopped $NAME."; exit 0 ;;
+        -h|--help) usage; exit 0 ;;
+        *) echo "Unknown option: $1" >&2; usage >&2; exit 2 ;;
+    esac
+    shift
+done
+
+cd "$(dirname "$0")/.."
+
+if [[ $BUILD == 1 ]]; then
+    podman build -t "$DEV_IMAGE" -f Containerfile .
+    IMAGE=$DEV_IMAGE
+    PULL=never
+elif [[ $OVERLAY == 1 ]]; then
+    podman build --pull=newer -t "$OVERLAY_IMAGE" -f - rootfs <<EOF
+FROM $IMAGE
+COPY . /
+RUN /usr/lib/gleem/configure-openbox
+EOF
+    IMAGE=$OVERLAY_IMAGE
+    PULL=never
+else
+    PULL=newer
+fi
+
+mounts=()
+if [[ -n $WORKSPACE ]]; then
+    mkdir -p "$WORKSPACE"
+    mounts=(-v "$WORKSPACE:/workspace:Z")
+fi
+
+# A fresh password each run, as a rental gets one.
+WS_PASSWORD=$(head -c 18 /dev/urandom | base64 | tr '+/' '-_')
+
+podman rm -f --ignore "$NAME" >/dev/null
+podman run -d --name "$NAME" --pull "$PULL" \
+    --device nvidia.com/gpu=all \
+    -p "127.0.0.1:$PORT:8082" \
+    -p "127.0.0.1:$WS_PORT:4455" \
+    -e "GLEEM_RESOLUTION=$RESOLUTION" \
+    -e "GLEEM_FRAMERATE=$FRAMERATE" \
+    -e "GLEEM_OBS_WEBSOCKET_PASSWORD=$WS_PASSWORD" \
+    "${mounts[@]}" \
+    "$IMAGE" >/dev/null
+
+URL="http://127.0.0.1:$PORT/"
+printf 'Waiting for Selkies'
+for _ in $(seq 60); do
+    if curl -fs -o /dev/null "$URL"; then
+        break
+    fi
+    if [[ $(podman inspect -f '{{.State.Running}}' "$NAME" 2>/dev/null) != true ]]; then
+        echo; echo "The container exited:" >&2
+        podman logs --tail 30 "$NAME" >&2
+        exit 1
+    fi
+    printf '.'
+    sleep 1
+done
+echo
+
+cat <<EOF
+Running $IMAGE as $NAME
+  Desktop:        $URL
+  obs-websocket:  ws://127.0.0.1:$WS_PORT  password $WS_PASSWORD
+  Workspace:      ${WORKSPACE:-(empty, inside the container)}
+  Logs:           podman logs -f $NAME
+  Stop:           $0 --stop
+EOF
+
+if [[ $OPEN == 1 ]]; then
+    xdg-open "$URL" >/dev/null 2>&1 &
+fi

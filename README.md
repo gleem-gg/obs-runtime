@@ -118,6 +118,15 @@ digest, which is what production pins through `HOSTING_RUNTIME_DIGEST`.
 
 ## Running it by hand
 
+`scripts/run-local` does this for you: it pulls the newest published image
+(or builds this checkout with `--build`), starts it as `gleem-obs-local` with
+obs-websocket on `127.0.0.1:4455` and a fresh password, waits for Selkies and
+opens the desktop in your browser. `--workspace DIR` mounts a directory as
+`/workspace`, so a saved or imported setup can be tried locally, and
+`--stop` removes the container. `--help` lists the rest.
+
+The underlying command:
+
 ```sh
 podman run --rm -it \
   --device nvidia.com/gpu=all \

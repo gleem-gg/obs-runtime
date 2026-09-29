@@ -1,0 +1,68 @@
+#!/bin/sh
+# Apply Gleem's openbox settings to the stock rc.xml: the theme, and the rules
+# in /etc/gleem/openbox-applications.xml. Openbox's stock rc.xml carries the
+# key and mouse bindings that make windows movable at all, so it is edited
+# rather than replaced.
+#
+# Safe to run again on an rc.xml it already edited, which is what lets
+# scripts/run-local --overlay apply a checkout's changes on top of a
+# published image.
+set -eu
+
+RC=/etc/xdg/openbox/rc.xml
+THEME=Dracula-withoutBorder
+
+test -f "/usr/share/themes/$THEME/openbox-3/themerc"
+
+# The theme's name is the first <name> after <theme>; the <font> blocks
+# further down have <name>s of their own.
+sed -i "/<theme>/,/<\/theme>/{0,/<name>/s|<name>[^<]*</name>|<name>$THEME</name>|}" "$RC"
+
+# One desktop. The stock four are reachable with the mouse wheel on the
+# desktop, so a renter scrolling past OBS loses it onto an empty desktop.
+sed -i '/<desktops>/,/<\/desktops>/s|<number>[0-9]*</number>|<number>1</number>|' "$RC"
+
+# No minimizing, on any window: with no taskbar, a minimized OBS could only
+# come back through a menu. Openbox minimizes from the title bar's button
+# and from the window menu (its icon, Alt+Space, a right-click on the
+# frame), so the button and the menu go; the title bar keeps the title,
+# maximize and close.
+sed -i '/<theme>/,/<\/theme>/s|<titleLayout>[A-Z]*</titleLayout>|<titleLayout>LMC</titleLayout>|' "$RC"
+perl -0pi -e '
+    s{\s*<keybind key="A-space">\s*<action name="ShowMenu"><menu>client-menu</menu></action>\s*</keybind>}{}gs;
+    s{\s*<action name="ShowMenu"><menu>client-menu</menu></action>}{}gs;
+' "$RC"
+
+# Clicking the desktop opens no menu. The stock root menu offers a terminal,
+# a browser and applications this image does not have, and Exit, which would
+# end the desktop; without minimizing, the window list has nothing to offer.
+perl -0pi -e '
+    s{\s*<mousebind button="(?:Middle|Right)" action="Press">\s*<action name="ShowMenu"><menu>(?:root-menu|client-list-combined-menu|client-list-menu)</menu></action>\s*</mousebind>}{}gs;
+' "$RC"
+
+# Nor load the Debian menu, which is not installed; openbox warns about it
+# at every start. /etc/xdg/openbox/menu.xml is empty for the same reason.
+sed -i '\|<file>/var/lib/openbox/debian-menu.xml</file>|d' "$RC"
+
+# Scrolling on a title bar rolls the window up into it ("shade"), which
+# looks like OBS vanishing; and the stock shortcuts start scrot and
+# Konqueror, which are not installed.
+perl -0pi -e '
+    s{\s*<mousebind button="Up" action="Click">\s*<action name="if">\s*<shaded>no</shaded>.*?</mousebind>}{}s;
+    s{\s*<mousebind button="Down" action="Click">\s*<action name="if">\s*<shaded>yes</shaded>.*?</mousebind>}{}s;
+    s{\s*(?:<!--[^>]*-->\s*)?<keybind key="(?:A-Print|Print|W-e)">.*?</keybind>}{}gs;
+' "$RC"
+
+# Drop the rule from an earlier run, then add the current one.
+sed -i '/<application class="obs"/,/<\/application>/d' "$RC"
+sed -i '/<!-- Merged into openbox.s rc.xml at build time/,/-->/d' "$RC"
+sed -i '/<applications>/r /etc/gleem/openbox-applications.xml' "$RC"
+
+grep -q "<name>$THEME</name>" "$RC"
+grep -q 'title="OBS \*"' "$RC"
+grep -q '<number>1</number>' "$RC"
+grep -q '<titleLayout>LMC</titleLayout>' "$RC"
+if grep -q '<menu>[a-z-]*</menu>\|debian-menu\|<shaded>\|scrot\|kfmclient' "$RC"; then
+    echo "configure-openbox: stock bindings left in $RC" >&2
+    exit 1
+fi
