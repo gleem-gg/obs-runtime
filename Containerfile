@@ -86,6 +86,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         # The display: a virtual X server and just enough window manager that
         # OBS's dialogs behave.
         xvfb x11-utils x11-xserver-utils openbox \
+        # Paints the wallpaper onto the root window. Openbox draws no
+        # background of its own, so without it the desktop behind OBS is black.
+        hsetroot \
         # Selkies shells out to xsel for clipboard sync in both directions.
         xsel \
         # Audio. OBS refuses to configure an audio source without a sink.
@@ -185,6 +188,11 @@ RUN mkdir -p /workspace /run/pulse \
 
 # Configuration files, such as fontconfig picking up the workspace's fonts.
 COPY rootfs/ /
+
+# Openbox's stock rc.xml carries the key and mouse bindings that make windows
+# movable at all, so the Gleem rules are added to it rather than replacing it.
+RUN sed -i '/<applications>/r /etc/gleem/openbox-applications.xml' /etc/xdg/openbox/rc.xml \
+    && grep -q 'title="OBS \*"' /etc/xdg/openbox/rc.xml
 
 # No setuid or setgid binaries. Nothing in this image runs as one user and
 # needs to become another: su, passwd, mount and the rest arrive with the base

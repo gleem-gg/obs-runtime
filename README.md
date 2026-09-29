@@ -12,7 +12,7 @@ machine never stores.
 
 | | |
 |---|---|
-| Display | `Xvfb` at the rental's resolution, `openbox` so OBS's dialogs behave |
+| Display | `Xvfb` at the rental's resolution, `openbox` so OBS's dialogs behave and its main window opens maximized, `hsetroot` for the Gleem wallpaper behind it |
 | Audio | PulseAudio null sink — OBS refuses to configure audio without one |
 | Application | OBS Studio, with `obs-websocket` on `127.0.0.1:4455` |
 | Streaming | [Selkies](https://github.com/selkies-project/selkies) v1.6.2 on the distribution's GStreamer 1.26, `nvh264enc` |

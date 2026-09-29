@@ -30,6 +30,9 @@ const OBS_CONFIG_HOME: &str = "/workspace/config";
 /// directory by /etc/fonts/conf.d/60-gleem-workspace.conf.
 const WORKSPACE_MEDIA: &str = "/workspace/media";
 
+/// The desktop background, rendered from assets/wallpaper/wallpaper.html.
+const WALLPAPER: &str = "/usr/share/gleem/wallpaper.png";
+
 /// Set by the signal handler when the container is asked to stop.
 static STOP_REQUESTED: AtomicBool = AtomicBool::new(false);
 
@@ -103,6 +106,8 @@ fn main() -> std::process::ExitCode {
         Err(error) => log(&format!("openbox did not start ({error}); continuing")),
     }
 
+    paint_wallpaper();
+
     // 4. OBS. Started before the streamer so the desktop the renter first
     //    sees already has something on it.
     let obs_args = obs_arguments();
@@ -141,6 +146,28 @@ fn wait_for_display() -> bool {
     }
 
     false
+}
+
+/// Paint the desktop behind OBS. Openbox draws no background, so without this
+/// whatever OBS does not cover streams as black. Painted once: nothing
+/// repaints the root window, and the resolution is fixed for the rental.
+fn paint_wallpaper() {
+    let painted = |binary: &str, args: &[&str]| {
+        Command::new(binary)
+            .args(args)
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status()
+            .is_ok_and(|status| status.success())
+    };
+
+    if painted("hsetroot", &["-cover", WALLPAPER]) {
+        return;
+    }
+
+    log("could not paint the wallpaper; falling back to a solid colour");
+    // The wallpaper's own base colour, so a failure still looks intended.
+    painted("xsetroot", &["-solid", "#131317"]);
 }
 
 /// Give PulseAudio a moment to create its socket before OBS looks for it.
