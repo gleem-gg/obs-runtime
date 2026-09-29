@@ -23,6 +23,17 @@ Two payloads are not Debian packages and are therefore called out here:
   /opt/selkies       Selkies, MPL-2.0     licence at /usr/share/doc/selkies/LICENSE
   /opt/selkies-web   Selkies, MPL-2.0     licence at /opt/selkies-web/LICENSE
 
+One OBS plugin is not a Debian package either:
+
+  obs-irl-control    OBS IRL Control, GPL-2.0-or-later
+                     /usr/lib/x86_64-linux-gnu/obs-plugins/obs-irl-control.so
+                     licence at /usr/share/doc/obs-irl-control/LICENSE
+
+It is built from source in the image build, from the public repository
+https://github.com/gleem-gg/obs-irl-control at the commit the Containerfile
+pins (IRL_CONTROL_COMMIT). That repository is its complete corresponding
+source.
+
 Within the web bundle, lib/guacamole-keyboard-selkies.js is Apache-2.0 from
 Apache Guacamole and carries its own header and an upstream modification note.
 

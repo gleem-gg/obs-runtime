@@ -26,6 +26,10 @@ fn main() -> std::process::ExitCode {
 
     log(&format!("starting: {resolution} at {framerate}fps, encoder {encoder}"));
 
+    // Taken out of the environment before anything is spawned, so only OBS
+    // gets them and nothing else inherits them by accident.
+    let obs_env = take_obs_only_env();
+
     let mut services: Vec<Service> = Vec::new();
 
     // 1. The display. Everything else needs it, so nothing else starts until
@@ -75,7 +79,7 @@ fn main() -> std::process::ExitCode {
     //    sees already has something on it.
     let obs_args = obs_arguments();
     let obs_borrowed: Vec<&str> = obs_args.iter().map(String::as_str).collect();
-    match spawn("obs", "obs", &obs_borrowed) {
+    match spawn_with_env("obs", "obs", &obs_borrowed, &obs_env) {
         Ok(service) => services.push(service),
         Err(error) => return fail("could not start OBS", &error, &mut services),
     }
@@ -219,9 +223,36 @@ fn turn_arguments() -> Vec<String> {
     ]
 }
 
+/// The environment meant for OBS alone: the Developer API token and URL that
+/// plugins such as OBS IRL Control use. The token reads the renter's IRL
+/// Sidekicks, and no other service in the container has any use for it.
+const OBS_ONLY_ENV: [&str; 2] = ["GLEEM_API_TOKEN", "GLEEM_API_URL"];
+
+fn take_obs_only_env() -> Vec<(&'static str, String)> {
+    OBS_ONLY_ENV
+        .into_iter()
+        .filter_map(|name| {
+            let value = std::env::var(name).ok().filter(|value| !value.is_empty());
+            // Still single-threaded here: nothing has been spawned yet.
+            unsafe { std::env::remove_var(name) };
+            value.map(|value| (name, value))
+        })
+        .collect()
+}
+
 fn spawn(name: &'static str, binary: &str, args: &[&str]) -> Result<Service, String> {
+    spawn_with_env(name, binary, args, &[])
+}
+
+fn spawn_with_env(
+    name: &'static str,
+    binary: &str,
+    args: &[&str],
+    env: &[(&'static str, String)],
+) -> Result<Service, String> {
     Command::new(binary)
         .args(args)
+        .envs(env.iter().map(|(key, value)| (*key, value.as_str())))
         .stdout(Stdio::inherit())
         .stderr(Stdio::inherit())
         .spawn()
@@ -300,4 +331,26 @@ fn env_or(name: &str, fallback: &str) -> String {
 
 fn log(message: &str) {
     println!("[gleem-runtime] {message}");
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn hands_the_api_token_to_obs_alone() {
+        unsafe {
+            std::env::set_var("GLEEM_API_TOKEN", "gleem_pat_a_b");
+            std::env::set_var("GLEEM_API_URL", "");
+        }
+
+        let env = take_obs_only_env();
+
+        // An empty URL means "not given", so the plugin falls back to its
+        // own default rather than an empty base URL.
+        assert_eq!(env, vec![("GLEEM_API_TOKEN", "gleem_pat_a_b".to_string())]);
+        // Gone from init's environment, so no other service inherits it.
+        assert!(std::env::var_os("GLEEM_API_TOKEN").is_none());
+        assert!(std::env::var_os("GLEEM_API_URL").is_none());
+    }
 }
