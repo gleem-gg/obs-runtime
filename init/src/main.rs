@@ -30,6 +30,11 @@ const OBS_CONFIG_HOME: &str = "/workspace/config";
 /// directory by /etc/fonts/conf.d/60-gleem-workspace.conf.
 const WORKSPACE_MEDIA: &str = "/workspace/media";
 
+/// Where OBS records to. On the workspace, like everything else a rental
+/// writes, but outside the saved setup: a recording is not configuration.
+/// Imported profiles point here, so it has to exist before OBS starts.
+const WORKSPACE_RECORDINGS: &str = "/workspace/recordings";
+
 /// The desktop background, rendered from assets/wallpaper/wallpaper.html.
 const WALLPAPER: &str = "/usr/share/gleem/wallpaper.png";
 
@@ -57,7 +62,7 @@ fn main() -> std::process::ExitCode {
     // stop` waits out its timeout and then kills OBS without a chance to save.
     install_stop_handlers();
 
-    if let Err(error) = prepare_workspace(Path::new(OBS_CONFIG_HOME), Path::new(WORKSPACE_MEDIA)) {
+    if let Err(error) = prepare_workspace(Path::new(OBS_CONFIG_HOME), Path::new(WORKSPACE_MEDIA), Path::new(WORKSPACE_RECORDINGS)) {
         log(&format!("could not prepare the workspace ({error}); OBS may start without a saved setup"));
     }
 
@@ -393,12 +398,13 @@ fn stop_gracefully(services: &mut [Service]) {
 /// includes a setup saved by OBS 30, which has a global.ini and no user.ini:
 /// OBS moves the user settings across itself, and refuses to if a user.ini
 /// already exists.
-fn prepare_workspace(config_home: &Path, media: &Path) -> std::io::Result<()> {
+fn prepare_workspace(config_home: &Path, media: &Path, recordings: &Path) -> std::io::Result<()> {
     let obs = config_home.join("obs-studio");
 
     std::fs::create_dir_all(obs.join("basic/scenes"))?;
     std::fs::create_dir_all(obs.join("basic/profiles"))?;
     std::fs::create_dir_all(media.join("fonts"))?;
+    std::fs::create_dir_all(recordings)?;
 
     let global = obs.join("global.ini");
     if !global.exists() && !obs.join("user.ini").exists() {
@@ -508,11 +514,12 @@ mod tests {
         let root = std::env::temp_dir().join(format!("runtime-init-test-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&root);
 
-        prepare_workspace(&root.join("config"), &root.join("media")).unwrap();
+        prepare_workspace(&root.join("config"), &root.join("media"), &root.join("recordings")).unwrap();
 
         assert!(root.join("config/obs-studio/basic/scenes").is_dir());
         assert!(root.join("config/obs-studio/basic/profiles").is_dir());
         assert!(root.join("media/fonts").is_dir());
+        assert!(root.join("recordings").is_dir());
         assert!(
             std::fs::read_to_string(root.join("config/obs-studio/plugin_config/obs-websocket/config.json"))
                 .unwrap()
@@ -536,7 +543,7 @@ mod tests {
         std::fs::create_dir_all(root.join("config/obs-studio")).unwrap();
         std::fs::write(root.join("config/obs-studio/global.ini"), "[General]\nFirstRun=true\nLanguage=de-DE\n").unwrap();
 
-        prepare_workspace(&root.join("config"), &root.join("media")).unwrap();
+        prepare_workspace(&root.join("config"), &root.join("media"), &root.join("recordings")).unwrap();
 
         assert_eq!(
             std::fs::read_to_string(root.join("config/obs-studio/global.ini")).unwrap(),
