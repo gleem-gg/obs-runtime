@@ -14,7 +14,7 @@ machine never stores.
 |---|---|
 | Display | `Xvfb` at the rental's resolution, `openbox` so OBS's dialogs behave and its main window opens maximized, `hsetroot` for the Gleem wallpaper behind it |
 | Audio | PulseAudio null sink — OBS refuses to configure audio without one |
-| Application | OBS Studio, with `obs-websocket` on `127.0.0.1:4455` |
+| Application | OBS Studio 32, built from source so it has the browser source, with `obs-websocket` on `127.0.0.1:4455` |
 | Streaming | [Selkies](https://github.com/selkies-project/selkies) v1.6.2 on the distribution's GStreamer 1.26, `nvh264enc` |
 | PID 1 | `runtime-init`, a small Rust binary in `init/` |
 
@@ -73,7 +73,11 @@ than the vendored bundle was.
 Apache Guacamole, carrying a noted local modification.
 
 **OBS Studio is GPL-2.0**, but it is executed rather than linked, which is the
-ordinary aggregation case for a container image.
+ordinary aggregation case for a container image. It is built from upstream's
+source rather than taken from Debian, because Debian's build has no browser
+source; its corresponding source is the upstream repository at the pinned
+commit. The browser source runs on OBS's prebuilt **CEF** (BSD-3-Clause,
+bundling Chromium), whose licence is installed beside OBS's.
 
 None of this blocks anything, and as of now none of it is outstanding: the
 answer is written down in `NOTICE`, which ships inside the image at
@@ -81,16 +85,17 @@ answer is written down in `NOTICE`, which ships inside the image at
 
 What was actually missing was smaller and more specific than the list above
 suggests. Every Debian package in the image already carries its own
-`/usr/share/doc/<package>/copyright` — 573 of them, obs-studio included — so
-the GPL and LGPL licences travel with the image without anyone doing anything.
+`/usr/share/doc/<package>/copyright`, so the GPL and LGPL licences travel
+with the image without anyone doing anything.
 The two payloads dpkg knows nothing about, `/opt/selkies` and
 `/opt/selkies-web`, shipped with **no licence file at all**, which MPL-2.0
 does not allow. Both now carry it, copied from `vendor/selkies/` alongside the
 code it covers, so a bump cannot leave the licence describing a different
 release.
 
-Source for the GPL and LGPL components is Debian's, unmodified; `NOTICE`
-records that and carries the written offer.
+Source for OBS and OBS IRL Control is their upstream repositories at the
+pinned commits; for every other GPL and LGPL component it is Debian's,
+unmodified. `NOTICE` records that and carries the written offer.
 
 ## Building
 

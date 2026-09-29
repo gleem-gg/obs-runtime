@@ -193,13 +193,11 @@ fn obs_arguments() -> Vec<String> {
         unsafe { std::env::set_var("HOME", "/root") };
     }
 
-    let mut args = vec![
-        "--startvirtualcam".to_string(),
-        "--disable-shutdown-check".to_string(),
-        // No first-run wizard: nobody is sitting in front of this to dismiss
-        // it, and it would be the first thing the renter saw.
-        "--disable-updater".to_string(),
-    ];
+    // No --startvirtualcam: the virtual camera needs a v4l2loopback device,
+    // which a rental container never has, and since OBS 31 asking for it
+    // anyway greets the renter with a "Failed to start virtual camera" error.
+    // The first-run wizard is kept away by prepare_workspace, not by a flag.
+    let mut args = vec!["--disable-shutdown-check".to_string(), "--disable-updater".to_string()];
 
     if let Ok(password) = std::env::var("GLEEM_OBS_WEBSOCKET_PASSWORD") {
         if !password.is_empty() {
@@ -382,10 +380,19 @@ fn stop_gracefully(services: &mut [Service]) {
 /// workspace, and that OBS will not open its first-run wizard: nobody is at
 /// this desktop to dismiss it, and it would be the first thing a renter saw.
 ///
-/// `--disable-updater` does not suppress the wizard. OBS runs it when
-/// `[General] FirstRun` is missing from global.ini, so a fresh workspace gets
-/// a global.ini that says the first run is over. An existing one, restored
-/// from the renter's saved setup, is left alone.
+/// `--disable-updater` does not suppress the wizard. OBS runs it on a first
+/// start that has no `[General] LastVersion` in global.ini, so a fresh
+/// workspace gets a global.ini with one. `FirstRun` would suppress it too,
+/// but since OBS 31 the same flag also stops OBS from giving a new scene
+/// collection its Desktop Audio source, and a renter would start without
+/// sound. The value only has to exist and be 31.0.0 or later, so OBS does not
+/// try to migrate settings from an OBS 30 layout; OBS overwrites it with its
+/// own version on the first start.
+///
+/// Anything restored from the renter's saved setup is left alone. That
+/// includes a setup saved by OBS 30, which has a global.ini and no user.ini:
+/// OBS moves the user settings across itself, and refuses to if a user.ini
+/// already exists.
 fn prepare_workspace(config_home: &Path, media: &Path) -> std::io::Result<()> {
     let obs = config_home.join("obs-studio");
 
@@ -394,12 +401,15 @@ fn prepare_workspace(config_home: &Path, media: &Path) -> std::io::Result<()> {
     std::fs::create_dir_all(media.join("fonts"))?;
 
     let global = obs.join("global.ini");
-    if !global.exists() {
-        std::fs::write(&global, "[General]\nFirstRun=true\n")?;
+    if !global.exists() && !obs.join("user.ini").exists() {
+        std::fs::write(&global, format!("[General]\nLastVersion={}\n", OBS_31))?;
     }
 
     Ok(())
 }
+
+/// OBS 31.0.0 as OBS packs a version: major, minor and patch in one integer.
+const OBS_31: u32 = 31 << 24;
 
 const SIGINT: i32 = 2;
 const SIGTERM: i32 = 15;
@@ -486,8 +496,11 @@ mod tests {
         assert!(root.join("media/fonts").is_dir());
         assert_eq!(
             std::fs::read_to_string(root.join("config/obs-studio/global.ini")).unwrap(),
-            "[General]\nFirstRun=true\n"
+            "[General]\nLastVersion=520093696\n"
         );
+        // FirstRun belongs to OBS: set early, it costs a new scene collection
+        // its Desktop Audio source.
+        assert!(!root.join("config/obs-studio/user.ini").exists());
 
         std::fs::remove_dir_all(&root).unwrap();
     }
@@ -505,6 +518,8 @@ mod tests {
             std::fs::read_to_string(root.join("config/obs-studio/global.ini")).unwrap(),
             "[General]\nFirstRun=true\nLanguage=de-DE\n"
         );
+        // Saved by OBS 30: OBS 32 migrates it only while user.ini is absent.
+        assert!(!root.join("config/obs-studio/user.ini").exists());
 
         std::fs::remove_dir_all(&root).unwrap();
     }
