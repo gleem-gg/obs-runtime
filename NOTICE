@@ -15,8 +15,29 @@ Where the licences are
 ----------------------
 
 Every Debian package in this image carries its own licence at
-/usr/share/doc/<package>/copyright — 573 of them at the time of writing,
-including obs-studio. `dpkg-query -W` lists what is installed.
+/usr/share/doc/<package>/copyright. `dpkg-query -W` lists what is
+installed.
+
+OBS Studio is not a Debian package: Debian builds it without the browser
+source, so the image builds OBS itself.
+
+  /usr/bin/obs and   OBS Studio, GPL-2.0-or-later
+  /usr/lib/x86_64-linux-gnu/libobs*, obs-plugins/, /usr/share/obs
+                     licence at /usr/share/doc/obs-studio/COPYING
+
+It is built unmodified from https://github.com/obsproject/obs-studio at the
+release commit the Containerfile pins (OBS_COMMIT), submodules included. That
+repository at that commit is its complete corresponding source.
+
+The browser source runs on the Chromium Embedded Framework, which OBS
+distributes as a prebuilt binary and the image takes unmodified from OBS's own
+download server, checked against the hash OBS publishes for that release:
+
+  obs-plugins/libcef.so and the files beside it
+                     CEF, BSD-3-Clause, bundling Chromium and its third-party
+                     components under their own licences
+                     licence at /usr/share/doc/obs-studio/cef/LICENSE.txt,
+                     version at /usr/share/doc/obs-studio/cef/README.txt
 
 Two payloads are not Debian packages and are therefore called out here:
 
@@ -46,7 +67,8 @@ vendor/selkies/README.md records their provenance.
 Obtaining source
 ----------------
 
-Every GPL- and LGPL-licensed component in this image is an **unmodified binary
+Apart from OBS Studio and OBS IRL Control, whose sources are given above,
+every GPL- and LGPL-licensed component in this image is an **unmodified binary
 package from Debian trixie**. Gleem has patched none of them. Their complete
 corresponding source is published by Debian and can be fetched for any package
 in this image with:
@@ -64,6 +86,7 @@ Notable components
 ------------------
 
   OBS Studio            GPL-2.0-or-later   executed as a separate process
+  CEF / Chromium        BSD-3-Clause, mixed browser source only
   GStreamer + plugins   LGPL-2.1 and mixed  see each package's copyright file
   Selkies               MPL-2.0             file-level copyleft
   Apache Guacamole      Apache-2.0          keyboard mapping only

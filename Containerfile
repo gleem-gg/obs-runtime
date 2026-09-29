@@ -41,34 +41,123 @@ FROM scratch AS selkies
 COPY vendor/selkies /
 
 
+# OBS Studio, built from source rather than taken from Debian. Debian builds
+# OBS without the browser source, because that needs the Chromium Embedded
+# Framework and Debian does not package CEF; a browser source is how most
+# streamers put alerts, chat and overlays on screen, so a rental without one
+# is not much of a streaming machine.
+#
+# Built against the CEF build OBS itself pins in CMakePresets.json for this
+# release, from OBS's CDN, checked against OBS's own hash. Pinned by commit,
+# like the plugin below; bump the version, the commit and the CEF values
+# together, copying the CEF ones from that release's CMakePresets.json
+# (dependencies → cef, ubuntu-x86_64).
+FROM docker.io/library/debian:trixie AS obs
+
+ARG OBS_VERSION=32.2.2
+ARG OBS_COMMIT=ba2f32bdf791005443988a4955e963663e16b1ed
+ARG CEF_VERSION=6533
+ARG CEF_REVISION=6
+ARG CEF_SHA256=7963335519a19ccdc5233f7334c5ab023026e2f3e9a0cc417007c09d86608146
+
+ENV DEBIAN_FRONTEND=noninteractive
+
+# OBS's own Ubuntu CI list, less what the build below switches off.
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        build-essential cmake ninja-build git ca-certificates curl xz-utils pkg-config \
+        extra-cmake-modules libglib2.0-dev libcurl4-openssl-dev \
+        libavcodec-dev libavdevice-dev libavfilter-dev libavformat-dev libavutil-dev \
+        libswresample-dev libswscale-dev libjansson-dev libx264-dev libmbedtls-dev \
+        libgl1-mesa-dev libgles2-mesa-dev libglvnd-dev libpulse-dev uthash-dev libsimde-dev \
+        libluajit-5.1-dev python3-dev swig \
+        libx11-dev libx11-xcb-dev libxcb-randr0-dev libxcb-shm0-dev libxcb-xinerama0-dev \
+        libxcb-composite0-dev libxinerama-dev libxcb1-dev libxcb-xfixes0-dev libxss-dev \
+        libxkbcommon-dev libatk1.0-dev libatk-bridge2.0-dev libxcomposite-dev libxdamage-dev \
+        libasound2-dev libfontconfig-dev libfreetype6-dev libspeexdsp-dev libudev-dev \
+        libv4l-dev libva-dev libpci-dev libdrm-dev \
+        nlohmann-json3-dev libwebsocketpp-dev libasio-dev libqrcodegencpp-dev \
+        libffmpeg-nvenc-dev librist-dev libsrt-openssl-dev \
+        qt6-base-dev qt6-base-private-dev qt6-svg-dev libnss3-dev libgbm-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN git clone --quiet --filter=tree:0 https://github.com/obsproject/obs-studio.git /src \
+    && git -C /src checkout --quiet --detach "$OBS_COMMIT" \
+    && git -C /src submodule update --quiet --init --recursive --depth 1
+
+# CEF arrives with its debug symbols, which make libcef.so 1.9 GB on its own.
+# Stripped here, before the build copies it around, so no layer ever holds
+# the unstripped file.
+RUN curl -fsSLo /tmp/cef.tar.xz \
+        "https://cdn-fastly.obsproject.com/downloads/cef_binary_${CEF_VERSION}_linux_x86_64_v${CEF_REVISION}.tar.xz" \
+    && echo "$CEF_SHA256  /tmp/cef.tar.xz" | sha256sum -c - \
+    && mkdir /cef \
+    && tar --strip-components 1 -xJf /tmp/cef.tar.xz -C /cef \
+    && rm /tmp/cef.tar.xz \
+    && strip --strip-unneeded /cef/Release/*.so*
+
+# Switched off: capture hardware a rental never has (AJA, DeckLink), Intel's
+# encoder on NVIDIA machines, desktop plumbing this X11 box does not run
+# (Wayland, PipeWire, JACK, sndio), VLC, WebRTC output, and the What's New
+# dialog, which would greet every renter with OBS's release notes.
+#
+# Installed twice: into /usr so OBS IRL Control can build against it, and
+# into /out for the runtime image. chrome-sandbox, Chromium's setuid sandbox
+# helper, is dropped from the latter: obs-browser runs CEF with no_sandbox,
+# and the image strips setuid bits anyway, so it would only be a dead file.
+# The build copies it by name, so it cannot go any earlier.
+RUN cmake -S /src -B /build -G Ninja \
+        -DCMAKE_BUILD_TYPE=Release \
+        -DCMAKE_INSTALL_PREFIX=/usr \
+        -DCMAKE_INSTALL_LIBDIR=lib/x86_64-linux-gnu \
+        -DOBS_VERSION_OVERRIDE="$OBS_VERSION" \
+        -DENABLE_BROWSER=ON -DCEF_ROOT_DIR=/cef \
+        -DENABLE_WHATSNEW=OFF \
+        -DENABLE_AJA=OFF -DENABLE_DECKLINK=OFF -DENABLE_QSV11=OFF \
+        -DENABLE_WAYLAND=OFF -DENABLE_PIPEWIRE=OFF -DENABLE_JACK=OFF -DENABLE_SNDIO=OFF \
+        -DENABLE_VLC=OFF -DENABLE_WEBRTC=OFF \
+    && cmake --build /build \
+    && cmake --install /build \
+    && DESTDIR=/out cmake --install /build \
+    && rm -rf /build /out/usr/lib/x86_64-linux-gnu/obs-plugins/chrome-sandbox \
+    && find /out -type f \( -name '*.so' -o -name '*.so.*' -o -path '*/bin/*' -o -name obs-browser-page \) \
+        -exec strip --strip-unneeded {} + \
+    && install -Dm644 /src/COPYING /out/usr/share/doc/obs-studio/COPYING \
+    && install -Dm644 /cef/LICENSE.txt /out/usr/share/doc/obs-studio/cef/LICENSE.txt \
+    && install -Dm644 /cef/README.txt /out/usr/share/doc/obs-studio/cef/README.txt
+
+# The Debian packages that provide every library OBS links against, for the
+# runtime stage to install. Derived rather than listed by hand, so a version
+# bump cannot leave a library out; a library nothing provides fails the build
+# here instead of failing a rental.
+RUN find /out -type f \( -name '*.so' -o -name '*.so.*' -o -path '*/bin/*' -o -name obs-browser-page \) \
+        | xargs ldd 2>/dev/null > /tmp/ldd \
+    ; if grep -q 'not found' /tmp/ldd; then grep 'not found' /tmp/ldd | sort -u; exit 1; fi \
+    && awk '$2 == "=>" && $3 ~ /^\// { print $3 }' /tmp/ldd | sort -u \
+        | while read -r lib; do dpkg -S "$(realpath "$lib")" 2>/dev/null || dpkg -S "$lib" 2>/dev/null || true; done \
+        | cut -d: -f1 | sort -u > /obs-packages \
+    && test -s /obs-packages
+
+
 # OBS IRL Control, Gleem's own plugin (GPL-2.0-or-later), built here against
 # the very libobs the image ships: a plugin built against a different OBS
-# release can load and then crash, and a crash takes the rental down.
+# release can load and then crash, and a crash takes the rental down. Building
+# on top of the OBS stage makes that true by construction.
 #
 # Pinned by commit rather than tag, so a moved tag cannot change what runs on
 # somebody else's hardware. The commit is the one the signed release tag
 # points at; bump the version and the commit together.
-FROM docker.io/library/debian:trixie AS irl-control
+FROM obs AS irl-control
 
 ARG IRL_CONTROL_VERSION=1.2.0
 ARG IRL_CONTROL_COMMIT=b0cf2beae828c84cccbc38c233b6cbe1fd41c360
 
-ENV DEBIAN_FRONTEND=noninteractive
-
-RUN apt-get update && apt-get install -y --no-install-recommends \
-        build-essential cmake ninja-build git ca-certificates \
-        libobs-dev qt6-base-dev libcurl4-openssl-dev \
-    && rm -rf /var/lib/apt/lists/*
-
-RUN git clone --quiet https://github.com/gleem-gg/obs-irl-control.git /src \
-    && git -C /src checkout --quiet --detach "$IRL_CONTROL_COMMIT" \
-    && grep -q "VERSION $IRL_CONTROL_VERSION " /src/CMakeLists.txt \
-    && cmake -S /src -B /build -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=/usr \
-    && cmake --build /build \
-    && DESTDIR=/out cmake --install /build \
-    && install -Dm644 /src/LICENSE /out/usr/share/doc/obs-irl-control/LICENSE \
-    # Checked against the OBS the runtime installs, below.
-    && dpkg-query -W -f='${Version}' libobs-dev > /libobs-version
+RUN git clone --quiet https://github.com/gleem-gg/obs-irl-control.git /irl \
+    && git -C /irl checkout --quiet --detach "$IRL_CONTROL_COMMIT" \
+    && grep -q "VERSION $IRL_CONTROL_VERSION " /irl/CMakeLists.txt \
+    && cmake -S /irl -B /irl-build -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=/usr \
+    && cmake --build /irl-build \
+    && DESTDIR=/irl-out cmake --install /irl-build \
+    && install -Dm644 /irl/LICENSE /irl-out/usr/share/doc/obs-irl-control/LICENSE
 
 
 FROM docker.io/library/debian:trixie AS rootfs
@@ -93,8 +182,6 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         xsel \
         # Audio. OBS refuses to configure an audio source without a sink.
         pulseaudio pulseaudio-utils \
-        # OBS itself. obs-websocket has been built in since OBS 28.
-        obs-studio \
         # Qt's SVG image and icon plugins. OBS's themes draw checkbox ticks
         # and the arrows on combo and spin boxes from SVGs; without these they
         # render blank, so a checkbox cannot be seen or ticked. Only a
@@ -171,12 +258,17 @@ COPY LICENSE NOTICE /usr/share/doc/gleem-obs-runtime/
 
 COPY --from=init-build /build/target/release/runtime-init /usr/local/bin/runtime-init
 
-# OBS IRL Control. Refuses to build an image whose OBS is not the one the
-# plugin was compiled against, which could otherwise happen if the Debian
-# mirror moved between the two stages.
-COPY --from=irl-control /out/ /
-RUN --mount=type=bind,from=irl-control,source=/libobs-version,target=/tmp/libobs-version \
-    test "$(dpkg-query -W -f='${Version}' obs-studio)" = "$(cat /tmp/libobs-version)"
+# OBS itself, from the stage above, and the Debian packages its libraries come
+# from. obs-websocket has been built in since OBS 28.
+COPY --from=obs /out/ /
+RUN --mount=type=bind,from=obs,source=/obs-packages,target=/tmp/obs-packages \
+    apt-get update \
+    && xargs -a /tmp/obs-packages apt-get install -y --no-install-recommends \
+    && rm -rf /var/lib/apt/lists/* \
+    && ldconfig \
+    && ! ldd /usr/bin/obs /usr/lib/x86_64-linux-gnu/obs-plugins/*.so 2>/dev/null | grep 'not found'
+
+COPY --from=irl-control /irl-out/ /
 
 # Everything a rental may write that outlives it goes here, and this is the
 # only path bind-mounted from the host's encrypted workspace. OBS keeps its
