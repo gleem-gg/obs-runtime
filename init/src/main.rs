@@ -21,6 +21,13 @@ const X_TIMEOUT: Duration = Duration::from_secs(60);
 /// to be longer than this, or OBS is killed mid-save.
 const OBS_STOP_TIMEOUT: Duration = Duration::from_secs(20);
 
+/// How often OBS may be restarted within `OBS_RESTART_WINDOW` before the
+/// container gives up. OBS going away is usually the renter closing its
+/// window, or a crash on the way out, and either way the desktop is still
+/// there to put it back on. One that dies this often is not coming back.
+const OBS_MAX_RESTARTS: usize = 5;
+const OBS_RESTART_WINDOW: Duration = Duration::from_secs(10 * 60);
+
 /// Where OBS keeps its configuration: on the encrypted workspace, the only
 /// place that outlives the container, so a renter's setup can be saved when
 /// the rental ends and restored into the next one.
@@ -116,8 +123,12 @@ fn main() -> std::process::ExitCode {
     // 4. OBS. Started before the streamer so the desktop the renter first
     //    sees already has something on it.
     let obs_args = obs_arguments();
-    let obs_borrowed: Vec<&str> = obs_args.iter().map(String::as_str).collect();
-    match spawn_with_env("obs", "obs", &obs_borrowed, &obs_env) {
+    let spawn_obs = || {
+        clear_crash_sentinel(Path::new(OBS_CONFIG_HOME));
+        let borrowed: Vec<&str> = obs_args.iter().map(String::as_str).collect();
+        spawn_with_env("obs", "obs", &borrowed, &obs_env)
+    };
+    match spawn_obs() {
         Ok(service) => services.push(service),
         Err(error) => return fail("could not start OBS", &error, &mut services),
     }
@@ -130,7 +141,7 @@ fn main() -> std::process::ExitCode {
 
     log("desktop is up");
 
-    supervise(&mut services)
+    supervise(&mut services, spawn_obs)
 }
 
 /// Wait until the X server answers, rather than sleeping a fixed guess.
@@ -320,10 +331,18 @@ fn spawn_with_env(
 
 /// Watch the services, and reap whatever PID 1 inherits.
 ///
-/// If any of them exits, the container exits: a rental with a dead streamer
-/// or a dead OBS is not a degraded rental, it is a black screen the renter is
+/// OBS is put back when it exits: a renter who closes its window, or an OBS
+/// that crashes on the way out, still has a desktop and a stream, and ending
+/// the whole rental over it left them on a dead session. Anything else
+/// exiting takes the container with it: a rental with a dead display or
+/// streamer is not a degraded rental, it is a black screen the renter is
 /// being charged for. Better it fails visibly so the agent can report it.
-fn supervise(services: &mut [Service]) -> std::process::ExitCode {
+fn supervise(
+    services: &mut [Service],
+    spawn_obs: impl Fn() -> Result<Service, String>,
+) -> std::process::ExitCode {
+    let mut obs_restarts = RestartBudget::new(OBS_MAX_RESTARTS, OBS_RESTART_WINDOW);
+
     loop {
         if STOP_REQUESTED.load(Ordering::SeqCst) {
             log("asked to stop; letting OBS save first");
@@ -333,6 +352,18 @@ fn supervise(services: &mut [Service]) -> std::process::ExitCode {
 
         for service in services.iter_mut() {
             match service.child.try_wait() {
+                Ok(Some(status)) if service.name == "obs" && obs_restarts.allow(Instant::now()) => {
+                    log(&format!("obs exited ({status}); starting it again"));
+
+                    match spawn_obs() {
+                        Ok(obs) => *service = obs,
+                        Err(error) => {
+                            log(&format!("could not start OBS again ({error}); shutting down"));
+                            shutdown(services);
+                            return std::process::ExitCode::FAILURE;
+                        }
+                    }
+                }
                 Ok(Some(status)) => {
                     log(&format!("{} exited ({status}); shutting down", service.name));
                     shutdown(services);
@@ -349,6 +380,31 @@ fn supervise(services: &mut [Service]) -> std::process::ExitCode {
         // Short, so a stop request is acted on promptly: every moment spent
         // here comes out of podman's stop timeout.
         thread::sleep(Duration::from_millis(250));
+    }
+}
+
+/// Restarts allowed within a sliding window.
+struct RestartBudget {
+    limit: usize,
+    window: Duration,
+    recent: Vec<Instant>,
+}
+
+impl RestartBudget {
+    fn new(limit: usize, window: Duration) -> Self {
+        Self { limit, window, recent: Vec::new() }
+    }
+
+    /// Whether one more restart at `now` is within budget; counts it if so.
+    fn allow(&mut self, now: Instant) -> bool {
+        self.recent.retain(|at| now.duration_since(*at) < self.window);
+
+        if self.recent.len() >= self.limit {
+            return false;
+        }
+
+        self.recent.push(now);
+        true
     }
 }
 
@@ -422,6 +478,24 @@ fn prepare_workspace(config_home: &Path, media: &Path, recordings: &Path) -> std
     std::fs::write(websocket.join("config.json"), OBS_WEBSOCKET_CONFIG)?;
 
     Ok(())
+}
+
+/// Forget that OBS last exited uncleanly.
+///
+/// OBS 32 ignores `--disable-shutdown-check` and, after any unclean exit,
+/// opens a modal "Crash Detected" dialog offering safe mode, behind which the
+/// whole window waits. The sentinel lives on the workspace, so it also rides
+/// along in a saved setup and would greet the renter at the start of their
+/// next rental. Nobody here can answer it before connecting, and the answer
+/// is always to start normally.
+fn clear_crash_sentinel(config_home: &Path) {
+    let sentinel = config_home.join("obs-studio/.sentinel");
+
+    match std::fs::remove_dir_all(&sentinel) {
+        Ok(()) => {}
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(error) => log(&format!("could not clear OBS's crash sentinel ({error}); it may ask about safe mode")),
+    }
 }
 
 /// OBS 31.0.0 as OBS packs a version: major, minor and patch in one integer.
@@ -553,6 +627,33 @@ mod tests {
         assert!(!root.join("config/obs-studio/user.ini").exists());
 
         std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn clears_the_crash_sentinel_so_obs_starts_without_asking() {
+        let root = std::env::temp_dir().join(format!("runtime-init-sentinel-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(root.join("obs-studio/.sentinel")).unwrap();
+        std::fs::write(root.join("obs-studio/.sentinel/run_1"), "").unwrap();
+
+        clear_crash_sentinel(&root);
+        assert!(!root.join("obs-studio/.sentinel").exists());
+        // Nothing to clear is not an error.
+        clear_crash_sentinel(&root);
+
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn allows_a_few_restarts_and_then_gives_up() {
+        let start = Instant::now();
+        let mut budget = RestartBudget::new(2, Duration::from_secs(60));
+
+        assert!(budget.allow(start));
+        assert!(budget.allow(start + Duration::from_secs(1)));
+        assert!(!budget.allow(start + Duration::from_secs(2)));
+        // Once the early restarts fall out of the window there is room again.
+        assert!(budget.allow(start + Duration::from_secs(61)));
     }
 
     #[test]
