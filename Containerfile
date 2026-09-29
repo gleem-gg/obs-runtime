@@ -46,11 +46,12 @@ COPY vendor/selkies /
 # release can load and then crash, and a crash takes the rental down.
 #
 # Pinned by commit rather than tag, so a moved tag cannot change what runs on
-# somebody else's hardware. Bump both together.
+# somebody else's hardware. The commit is the one the signed release tag
+# points at; bump the version and the commit together.
 FROM docker.io/library/debian:trixie AS irl-control
 
 ARG IRL_CONTROL_VERSION=1.2.0
-ARG IRL_CONTROL_COMMIT=e915dc69c5cc1a5743aa4f68be10f40a5464b40d
+ARG IRL_CONTROL_COMMIT=b0cf2beae828c84cccbc38c233b6cbe1fd41c360
 
 ENV DEBIAN_FRONTEND=noninteractive
 
