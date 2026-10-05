@@ -50,6 +50,12 @@ const WALLPAPER: &str = "/usr/share/gleem/wallpaper.png";
 /// and still gets the SIGINT it saves on.
 const VGLRUN: &str = "/opt/VirtualGL/bin/vglrun";
 
+/// Run under VirtualGL once before OBS is, to see whether it reaches a GPU.
+const VGL_PROBE: &str = "/opt/VirtualGL/bin/glxinfo";
+
+/// How long the probe may take. It answers in well under a second.
+const VGL_PROBE_TIMEOUT: Duration = Duration::from_secs(10);
+
 /// Where the container runtime puts the GPU's device nodes.
 const DRI_DIR: &str = "/dev/dri";
 
@@ -136,16 +142,21 @@ fn main() -> std::process::ExitCode {
     //    draw WebGL with SwiftShader: a single 1080p WebGL page cost about
     //    five CPU cores and still ran at 4 fps. Under VirtualGL both render on
     //    the GPU (measured on the reference RTX 3060: 30 fps, under one core).
-    //    Only the GPU's own nodes are in /dev/dri: CDI injects nothing else.
-    let (obs_binary, obs_args) = match gpu_card(Path::new(DRI_DIR)) {
-        Some(card) => {
-            log(&format!("rendering OBS on {} through VirtualGL", card.display()));
-            let mut args = vec!["-d".to_string(), card.display().to_string(), "obs".to_string()];
+    //
+    //    Whether VirtualGL can reach the GPU depends on the host, so it is
+    //    tried first rather than assumed: the agent's systemd unit, for one,
+    //    did not allow DRM devices, and OBS under a VirtualGL that cannot open
+    //    its device exits at once, which ended every rental within seconds.
+    //    When no device works, OBS renders in software as it always has.
+    let (obs_binary, obs_args) = match vgl_device(&vgl_candidates(Path::new(DRI_DIR))) {
+        Some(device) => {
+            log(&format!("rendering OBS on the GPU through VirtualGL (device {device})"));
+            let mut args = vec!["-d".to_string(), device, "obs".to_string()];
             args.extend(obs_arguments());
             (VGLRUN, args)
         }
         None => {
-            log("no GPU device node; OBS renders in software");
+            log("VirtualGL reaches no GPU here; OBS renders in software");
             ("obs", obs_arguments())
         }
     };
@@ -226,6 +237,83 @@ fn wait_for_audio() {
     }
 
     log("the audio socket never appeared; OBS will start without audio");
+}
+
+/// The devices to try VirtualGL with, best first. `egl` is the first EGL
+/// device, which on NVIDIA needs no DRM node at all; a card node is the
+/// fallback. Render nodes are not offered: VirtualGL rejects them.
+fn vgl_candidates(dri: &Path) -> Vec<String> {
+    let mut candidates = vec!["egl".to_string()];
+    candidates.extend(gpu_card(dri).map(|card| card.display().to_string()));
+    candidates
+}
+
+/// The first candidate VirtualGL renders on a GPU with, if any.
+fn vgl_device(candidates: &[String]) -> Option<String> {
+    candidates.iter().find_map(|device| match vgl_renderer(device) {
+        Ok(renderer) if is_gpu_renderer(&renderer) => {
+            log(&format!("VirtualGL device {device}: {renderer}"));
+            Some(device.clone())
+        }
+        Ok(renderer) => {
+            log(&format!("VirtualGL device {device} renders in software ({renderer}); not using it"));
+            None
+        }
+        Err(error) => {
+            log(&format!("VirtualGL device {device} does not work: {error}"));
+            None
+        }
+    })
+}
+
+/// The OpenGL renderer VirtualGL gives a program on `device`.
+fn vgl_renderer(device: &str) -> Result<String, String> {
+    let mut child = Command::new(VGLRUN)
+        .args(["-d", device, VGL_PROBE, "-B"])
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(|error| error.to_string())?;
+
+    let deadline = Instant::now() + VGL_PROBE_TIMEOUT;
+    loop {
+        match child.try_wait() {
+            Ok(Some(_)) => break,
+            Ok(None) if Instant::now() < deadline => thread::sleep(Duration::from_millis(50)),
+            Ok(None) => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return Err("timed out".into());
+            }
+            Err(error) => return Err(error.to_string()),
+        }
+    }
+
+    let output = child.wait_with_output().map_err(|error| error.to_string())?;
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    match parse_renderer(&stdout) {
+        Some(renderer) if output.status.success() => Ok(renderer),
+        _ => {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            let reason = stderr.lines().chain(stdout.lines()).map(str::trim).rfind(|line| !line.is_empty());
+            Err(format!("{} ({})", output.status, reason.unwrap_or("no output")))
+        }
+    }
+}
+
+/// The renderer line of `glxinfo -B`.
+fn parse_renderer(glxinfo: &str) -> Option<String> {
+    glxinfo
+        .lines()
+        .find_map(|line| line.trim().strip_prefix("OpenGL renderer string:"))
+        .map(|renderer| renderer.trim().to_string())
+}
+
+/// Mesa's and Chromium's software renderers are not worth VirtualGL's copies.
+fn is_gpu_renderer(renderer: &str) -> bool {
+    let renderer = renderer.to_ascii_lowercase();
+    !["llvmpipe", "softpipe", "swrast", "swiftshader"].iter().any(|software| renderer.contains(software))
 }
 
 /// The first DRM card node, which VirtualGL opens through EGL. Card nodes,
@@ -621,6 +709,30 @@ fn log(message: &str) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn tries_the_first_egl_device_before_a_card_node() {
+        let dri = std::env::temp_dir().join(format!("runtime-init-candidates-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dri);
+        assert_eq!(vgl_candidates(&dri), vec!["egl".to_string()]);
+
+        std::fs::create_dir_all(&dri).unwrap();
+        std::fs::write(dri.join("card1"), "").unwrap();
+        assert_eq!(vgl_candidates(&dri), vec!["egl".to_string(), dri.join("card1").display().to_string()]);
+
+        std::fs::remove_dir_all(&dri).unwrap();
+    }
+
+    #[test]
+    fn reads_the_renderer_and_tells_gpus_from_software() {
+        let glxinfo = "name of display: :0\ndisplay: :0  screen: 0\n    Vendor: NVIDIA Corporation (0x10de)\nOpenGL vendor string: NVIDIA Corporation\nOpenGL renderer string: NVIDIA GeForce RTX 3060/PCIe/SSE2\n";
+        let renderer = parse_renderer(glxinfo).unwrap();
+        assert_eq!(renderer, "NVIDIA GeForce RTX 3060/PCIe/SSE2");
+        assert!(is_gpu_renderer(&renderer));
+
+        assert!(!is_gpu_renderer("llvmpipe (LLVM 19.1.7, 256 bits)"));
+        assert_eq!(parse_renderer("[VGL] ERROR: in init3D--\n[VGL]    245: Invalid EGL device\n"), None);
+    }
 
     #[test]
     fn picks_the_first_card_node_and_ignores_render_nodes() {
