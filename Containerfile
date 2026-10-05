@@ -148,8 +148,8 @@ RUN find /out -type f \( -name '*.so' -o -name '*.so.*' -o -path '*/bin/*' -o -n
 # points at; bump the version and the commit together.
 FROM obs AS irl-control
 
-ARG IRL_CONTROL_VERSION=1.2.0
-ARG IRL_CONTROL_COMMIT=b0cf2beae828c84cccbc38c233b6cbe1fd41c360
+ARG IRL_CONTROL_VERSION=1.3.0
+ARG IRL_CONTROL_COMMIT=56d9ed7635bd259c7bbc2e1dafa4ace2fb14eabc
 
 RUN git clone --quiet https://github.com/gleem-gg/obs-irl-control.git /irl \
     && git -C /irl checkout --quiet --detach "$IRL_CONTROL_COMMIT" \
