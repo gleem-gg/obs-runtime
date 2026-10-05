@@ -91,6 +91,7 @@ WS_PASSWORD=$(head -c 18 /dev/urandom | base64 | tr '+/' '-_')
 podman rm -f --ignore "$NAME" >/dev/null
 podman run -d --name "$NAME" --pull "$PULL" \
     --device nvidia.com/gpu=all \
+    --shm-size 1g \
     -p "127.0.0.1:$PORT:8082" \
     -p "127.0.0.1:$WS_PORT:4455" \
     -e "GLEEM_RESOLUTION=$RESOLUTION" \
