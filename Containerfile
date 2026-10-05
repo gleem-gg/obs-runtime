@@ -160,6 +160,25 @@ RUN git clone --quiet https://github.com/gleem-gg/obs-irl-control.git /irl \
     && install -Dm644 /irl/LICENSE /irl-out/usr/share/doc/obs-irl-control/LICENSE
 
 
+# Gleem for OBS (obs-gleem, GPL-2.0-or-later): the "Gleem IRL Sidekick"
+# source, so a renter can add their IRL Sidekick without copying a pull URL.
+# It signs in with the GLEEM_API_TOKEN runtime-init already hands OBS. Built
+# like IRL Control above, against this image's libobs, pinned by commit. Its
+# version lives in buildspec.json (OBS plugin template), not CMakeLists.txt.
+FROM obs AS obs-gleem
+
+ARG OBS_GLEEM_VERSION=0.1.0
+ARG OBS_GLEEM_COMMIT=ca7d428b1b1103797b6e47dfc39c28dc13e8bd46
+
+RUN git clone --quiet https://github.com/gleem-gg/obs-gleem.git /gleem \
+    && git -C /gleem checkout --quiet --detach "$OBS_GLEEM_COMMIT" \
+    && grep -q "\"version\": \"$OBS_GLEEM_VERSION\"" /gleem/buildspec.json \
+    && cmake -S /gleem -B /gleem-build -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=/usr \
+    && cmake --build /gleem-build \
+    && DESTDIR=/gleem-out cmake --install /gleem-build \
+    && install -Dm644 /gleem/LICENSE /gleem-out/usr/share/doc/obs-gleem/LICENSE
+
+
 FROM docker.io/library/debian:trixie AS rootfs
 
 # Selkies comes from vendor/selkies/, not from upstream. On 2026-09-23 the
@@ -269,6 +288,7 @@ RUN --mount=type=bind,from=obs,source=/obs-packages,target=/tmp/obs-packages \
     && ! ldd /usr/bin/obs /usr/lib/x86_64-linux-gnu/obs-plugins/*.so 2>/dev/null | grep 'not found'
 
 COPY --from=irl-control /irl-out/ /
+COPY --from=obs-gleem /gleem-out/ /
 
 # Everything a rental may write that outlives it goes here, and this is the
 # only path bind-mounted from the host's encrypted workspace. OBS keeps its
