@@ -225,6 +225,21 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         fonts-dejavu-core \
     && rm -rf /var/lib/apt/lists/*
 
+# VirtualGL, so OBS and its browser source render on the GPU. Xvfb has no GPU
+# behind it: without this, OBS composites with Mesa's software renderer and
+# CEF draws WebGL with SwiftShader, and one 1080p WebGL browser source took
+# about five CPU cores for 4 fps. runtime-init starts OBS through vglrun,
+# whose EGL back end renders on the GPU's DRM node and hands finished frames
+# to Xvfb. Debian does not package it; the upstream package is pinned by hash.
+ARG VIRTUALGL_VERSION=3.1.5
+ARG VIRTUALGL_SHA256=df3f7788ce41b182a47c0d298e5cd6d2d63579522cb41825970b7726e825485e
+RUN curl -fsSLo /tmp/virtualgl.deb \
+        "https://github.com/VirtualGL/virtualgl/releases/download/${VIRTUALGL_VERSION}/virtualgl_${VIRTUALGL_VERSION}_amd64.deb" \
+    && echo "$VIRTUALGL_SHA256  /tmp/virtualgl.deb" | sha256sum -c - \
+    && apt-get update \
+    && apt-get install -y --no-install-recommends /tmp/virtualgl.deb \
+    && rm -rf /var/lib/apt/lists/* /tmp/virtualgl.deb
+
 # The Python component that drives the pipeline and terminates signalling.
 # Built in a throwaway toolchain: some of its dependencies are C extensions,
 # and a compiler has no business staying in an image a renter gets a desktop

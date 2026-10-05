@@ -44,6 +44,18 @@ Two payloads are not Debian packages and are therefore called out here:
   /opt/selkies       Selkies, MPL-2.0     licence at /usr/share/doc/selkies/LICENSE
   /opt/selkies-web   Selkies, MPL-2.0     licence at /opt/selkies-web/LICENSE
 
+VirtualGL is installed from its upstream Debian package, which Debian itself
+does not ship. dpkg knows about it, but its licence is not at the usual path:
+
+  /opt/VirtualGL     VirtualGL, wxWindows Library Licence 3.1 (LGPL-2.1 with
+                     an exception)
+                     licence at /usr/share/doc/virtualgl-<version>/LICENSE.txt,
+                     and LICENSE-FLTK.txt beside it for the FLTK code in
+                     vglconfig
+
+It is the unmodified package from https://github.com/VirtualGL/virtualgl
+releases at the version and hash the Containerfile pins (VIRTUALGL_VERSION).
+
 One OBS plugin is not a Debian package either:
 
   obs-irl-control    OBS IRL Control, GPL-2.0-or-later

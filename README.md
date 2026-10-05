@@ -15,6 +15,7 @@ machine never stores.
 | Display | `Xvfb` at the rental's resolution, `openbox` so OBS's dialogs behave and its main window opens maximized, `hsetroot` for the Gleem wallpaper behind it |
 | Audio | PulseAudio null sink — OBS refuses to configure audio without one |
 | Application | OBS Studio 32, built from source so it has the browser source, with `obs-websocket` on `127.0.0.1:4455` |
+| Rendering | [VirtualGL](https://virtualgl.org) 3.1: OBS starts under `vglrun`, so its scenes and the browser source's WebGL render on the GPU rather than in software on Xvfb |
 | Streaming | [Selkies](https://github.com/selkies-project/selkies) v1.6.2 on the distribution's GStreamer 1.26, `nvh264enc` |
 | PID 1 | `runtime-init`, a small Rust binary in `init/` |
 
@@ -130,6 +131,7 @@ The underlying command:
 ```sh
 podman run --rm -it \
   --device nvidia.com/gpu=all \
+  --shm-size 1g \
   -p 127.0.0.1:8082:8082 \
   -e GLEEM_RESOLUTION=1920x1080 -e GLEEM_FRAMERATE=30 \
   localhost/gleem-obs-runtime:dev
@@ -139,3 +141,8 @@ Without `--device nvidia.com/gpu=all` the pipeline has no encoder and the
 container will fail on startup rather than silently falling back to software
 encoding — which would cook a host's CPU and look, to the renter, exactly like
 it was working.
+
+`--shm-size 1g` matches what the agent gives a rental. Podman's default 64 MB
+of `/dev/shm` is not enough for Chromium: whenever WebGL falls back to
+software drawing buffers, which live there, a 1080p browser source runs out of
+it and its renderer dies with `SIGTRAP`.

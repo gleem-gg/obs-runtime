@@ -6,7 +6,7 @@
 //! that a component dying takes the container with it, rather than leaving a
 //! rental that looks alive but has no desktop behind it.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread;
@@ -44,6 +44,14 @@ const WORKSPACE_RECORDINGS: &str = "/workspace/recordings";
 
 /// The desktop background, rendered from assets/wallpaper/wallpaper.html.
 const WALLPAPER: &str = "/usr/share/gleem/wallpaper.png";
+
+/// VirtualGL's launcher. It preloads the library that sends OBS's OpenGL to
+/// the GPU instead of Xvfb, then execs its arguments, so OBS keeps the PID
+/// and still gets the SIGINT it saves on.
+const VGLRUN: &str = "/opt/VirtualGL/bin/vglrun";
+
+/// Where the container runtime puts the GPU's device nodes.
+const DRI_DIR: &str = "/dev/dri";
 
 /// Set by the signal handler when the container is asked to stop.
 static STOP_REQUESTED: AtomicBool = AtomicBool::new(false);
@@ -122,11 +130,29 @@ fn main() -> std::process::ExitCode {
 
     // 4. OBS. Started before the streamer so the desktop the renter first
     //    sees already has something on it.
-    let obs_args = obs_arguments();
+    //
+    //    Xvfb has no GPU behind it, so on its own OBS would composite every
+    //    scene with Mesa's software renderer, and the browser source would
+    //    draw WebGL with SwiftShader: a single 1080p WebGL page cost about
+    //    five CPU cores and still ran at 4 fps. Under VirtualGL both render on
+    //    the GPU (measured on the reference RTX 3060: 30 fps, under one core).
+    //    Only the GPU's own nodes are in /dev/dri: CDI injects nothing else.
+    let (obs_binary, obs_args) = match gpu_card(Path::new(DRI_DIR)) {
+        Some(card) => {
+            log(&format!("rendering OBS on {} through VirtualGL", card.display()));
+            let mut args = vec!["-d".to_string(), card.display().to_string(), "obs".to_string()];
+            args.extend(obs_arguments());
+            (VGLRUN, args)
+        }
+        None => {
+            log("no GPU device node; OBS renders in software");
+            ("obs", obs_arguments())
+        }
+    };
     let spawn_obs = || {
         clear_crash_sentinel(Path::new(OBS_CONFIG_HOME));
         let borrowed: Vec<&str> = obs_args.iter().map(String::as_str).collect();
-        spawn_with_env("obs", "obs", &borrowed, &obs_env)
+        spawn_with_env("obs", obs_binary, &borrowed, &obs_env)
     };
     match spawn_obs() {
         Ok(service) => services.push(service),
@@ -200,6 +226,19 @@ fn wait_for_audio() {
     }
 
     log("the audio socket never appeared; OBS will start without audio");
+}
+
+/// The first DRM card node, which VirtualGL opens through EGL. Card nodes,
+/// not render nodes: VirtualGL's EGL back end takes a card.
+fn gpu_card(dri: &Path) -> Option<PathBuf> {
+    let mut cards: Vec<PathBuf> = std::fs::read_dir(dri)
+        .ok()?
+        .filter_map(Result::ok)
+        .filter(|entry| entry.file_name().to_string_lossy().starts_with("card"))
+        .map(|entry| entry.path())
+        .collect();
+    cards.sort();
+    cards.into_iter().next()
 }
 
 fn obs_arguments() -> Vec<String> {
@@ -582,6 +621,22 @@ fn log(message: &str) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn picks_the_first_card_node_and_ignores_render_nodes() {
+        let dri = std::env::temp_dir().join(format!("runtime-init-dri-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dri);
+        std::fs::create_dir_all(&dri).unwrap();
+        assert_eq!(gpu_card(&dri), None);
+
+        for name in ["renderD128", "card2", "card1", "by-path"] {
+            std::fs::write(dri.join(name), "").unwrap();
+        }
+        assert_eq!(gpu_card(&dri), Some(dri.join("card1")));
+        assert_eq!(gpu_card(&dri.join("missing")), None);
+
+        std::fs::remove_dir_all(&dri).unwrap();
+    }
 
     #[test]
     fn prepares_a_fresh_workspace_without_the_first_run_wizard() {
