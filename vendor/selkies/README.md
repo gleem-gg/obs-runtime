@@ -1,6 +1,6 @@
 # Selkies 1.6.2, vendored
 
-Three files, all MPL-2.0 and all unmodified:
+Three files, all MPL-2.0 and all unmodified, plus Gleem's patches:
 
 | File | SHA-256 |
 |---|---|
@@ -39,8 +39,20 @@ RTX 3060.
 * **LICENSE.** The file the Containerfile fetched from upstream's `v1.6.2`
   tag at build time.
 
+## Patches
+
+`patches/*.patch` are applied in order to the **installed** package at image
+build time (see the Containerfile), so the wheel above stays exactly as
+recovered and every change Gleem makes to Selkies is a reviewable diff. A
+patch that no longer applies fails the build. Patched files remain MPL-2.0.
+
+| Patch | Why |
+|---|---|
+| `0001-non-blocking-peer-retry.patch` | The peer-retry handlers called `time.sleep(2)` on the event loop that also runs the signalling server, freezing it for 2 s per retry; browsers reconnecting during a freeze were rejected as duplicate peers (gleem-gg/machine-agent#18). |
+
 ## Bumping
 
-Replace all three files together and change `ARG SELKIES_VERSION` in the
+Replace all three files together, check every patch still applies (or is
+no longer needed) and change `ARG SELKIES_VERSION` in the
 Containerfile, then re-verify NVENC encoding and the browser session end to
 end before publishing.

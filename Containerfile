@@ -259,7 +259,7 @@ RUN curl -fsSLo /tmp/virtualgl.deb \
 # shim back.
 RUN --mount=type=bind,from=selkies,target=/tmp/selkies \
     apt-get update \
-    && apt-get install -y --no-install-recommends build-essential python3-dev linux-libc-dev \
+    && apt-get install -y --no-install-recommends build-essential python3-dev linux-libc-dev patch \
     && python3 -m venv --system-site-packages /opt/selkies \
     && /opt/selkies/bin/pip install --no-cache-dir \
         setuptools \
@@ -274,7 +274,14 @@ RUN --mount=type=bind,from=selkies,target=/tmp/selkies \
     # The wheel ships libnvrtc.so.12; GStreamer dlopens the bare SONAME.
     && ln -sf /opt/selkies/lib/python3.13/site-packages/nvidia/cuda_nvrtc/lib/libnvrtc.so.12 \
               /opt/selkies/lib/python3.13/site-packages/nvidia/cuda_nvrtc/lib/libnvrtc.so \
-    && apt-get purge -y build-essential python3-dev linux-libc-dev \
+    # Gleem's fixes to the vendored package, applied to the installed copy so
+    # the wheel itself stays as recovered. With `--forward --fuzz=0` and the
+    # exit, a patch that no longer applies fails the build rather than
+    # shipping an unpatched Selkies.
+    && for patch in /tmp/selkies/patches/*.patch; do \
+           patch --forward --fuzz=0 -p1 -d /opt/selkies/lib/python3.13/site-packages < "$patch" || exit 1; \
+       done \
+    && apt-get purge -y build-essential python3-dev linux-libc-dev patch \
     && apt-get autoremove -y \
     && rm -rf /var/lib/apt/lists/*
 

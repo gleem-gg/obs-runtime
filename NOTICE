@@ -85,6 +85,11 @@ repository, because the Selkies project removed its 1.x releases and tags on
 JavaScript, so the vendored files are the source form as well as the binary;
 vendor/selkies/README.md records their provenance.
 
+The Python package is installed with Gleem's patches from
+vendor/selkies/patches/ applied (one today: selkies_gstreamer/__main__.py).
+The patched files remain MPL-2.0; the patches in this public repository,
+applied to the vendored wheel, are their source form.
+
 Obtaining source
 ----------------
 
@@ -121,9 +126,9 @@ Modifying anything here
 
 MPL-2.0 is file-level copyleft: a modified Selkies file must stay MPL-2.0 and
 its source must be made available. That is the whole obligation — it does not
-reach Gleem's own files, even in the same image. Files are kept byte-identical
-to upstream precisely so this stays a non-issue; see the note in the vendored
-web client's README.
+reach Gleem's own files, even in the same image. Changes are kept as patches
+in vendor/selkies/patches/ in this public repository, so the modified source
+is published by construction; see vendor/selkies/README.md.
 
 Patching OBS, GStreamer or any other GPL component and shipping the result
 would put those changes under the GPL and require publishing them. Nothing in
