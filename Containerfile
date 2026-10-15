@@ -25,6 +25,11 @@
 # mature there, and a headless Wayland compositor is a moving part with no
 # payoff for a desktop nobody is sitting in front of.
 
+# The OBS release the image is built on. Global so the final stage can name
+# it too: together with the base, it is the ABI plugins have to be built
+# against (see OBS_ABI below).
+ARG OBS_VERSION=32.2.2
+
 FROM docker.io/library/rust:1-bookworm AS init-build
 
 WORKDIR /build
@@ -52,9 +57,13 @@ COPY vendor/selkies /
 # like the plugin below; bump the version, the commit and the CEF values
 # together, copying the CEF ones from that release's CMakePresets.json
 # (dependencies → cef, ubuntu-x86_64).
+#
+# This stage is also published on its own as ghcr.io/gleem-gg/obs-runtime-sdk,
+# tagged with the ABI key, so the plugin catalog (gleem-gg/obs-plugins) builds
+# against exactly the libobs this image ships.
 FROM docker.io/library/debian:trixie AS obs
 
-ARG OBS_VERSION=32.2.2
+ARG OBS_VERSION
 ARG OBS_COMMIT=ba2f32bdf791005443988a4955e963663e16b1ed
 ARG CEF_VERSION=6533
 ARG CEF_REVISION=6
@@ -335,11 +344,25 @@ RUN /usr/lib/gleem/configure-openbox
 RUN find / -xdev -type f -perm /6000 -exec chmod a-s {} +
 
 
+# Plugins a renter picks for a rental are not in the image: the agent
+# downloads them from the plugin catalog and mounts them under
+# /opt/gleem/obs-plugins, and runtime-init points OBS at them. They are built
+# per ABI key, which names this OBS build: the OBS release and the base
+# distribution. Bump it with either; the control plane sends plugins built
+# for the key in HOSTING_RUNTIME_OBS_ABI, which has to match.
+ARG OBS_VERSION
+RUN mkdir -p /opt/gleem/obs-plugins \
+    && echo "obs-${OBS_VERSION}-trixie" > /etc/gleem/obs-abi
+
+
 # The image hosts pull: one layer holding the finished tree, so the base
 # image's setuid files never appear in any layer's tar. Metadata does not
 # survive a `FROM scratch`, so everything a container needs at runtime is
 # declared here rather than in the build stage.
 FROM scratch
+
+ARG OBS_VERSION
+LABEL gg.gleem.obs-abi="obs-${OBS_VERSION}-trixie"
 
 COPY --from=rootfs / /
 

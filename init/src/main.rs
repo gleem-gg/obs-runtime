@@ -42,6 +42,17 @@ const WORKSPACE_MEDIA: &str = "/workspace/media";
 /// Imported profiles point here, so it has to exist before OBS starts.
 const WORKSPACE_RECORDINGS: &str = "/workspace/recordings";
 
+/// Plugins the renter picked for this rental. The agent downloads each one
+/// from Gleem's plugin catalog and mounts it here read-only, as
+/// `<module>/bin/<module>.so` beside `<module>/data`. Kept off the workspace on
+/// purpose: OBS's own user plugin directory lives in the saved setup, which
+/// would carry a rental's plugins into every later one.
+const RENTAL_PLUGINS: &str = "/opt/gleem/obs-plugins";
+
+/// Where runtime-init links each rental plugin's data directory by module
+/// name, the one layout OBS_PLUGINS_DATA_PATH understands.
+const RENTAL_PLUGIN_DATA: &str = "/run/gleem/obs-plugin-data";
+
 /// The desktop background, rendered from assets/wallpaper/wallpaper.html.
 const WALLPAPER: &str = "/usr/share/gleem/wallpaper.png";
 
@@ -78,6 +89,10 @@ fn main() -> std::process::ExitCode {
     // gets them and nothing else inherits them by accident.
     let mut obs_env = take_obs_only_env();
     obs_env.push(("XDG_CONFIG_HOME", OBS_CONFIG_HOME.to_string()));
+    match rental_plugin_env(Path::new(RENTAL_PLUGINS), Path::new(RENTAL_PLUGIN_DATA)) {
+        Ok(env) => obs_env.extend(env),
+        Err(error) => log(&format!("could not set up the rental's plugins ({error}); OBS starts without them")),
+    }
 
     // As PID 1, a signal with no handler is ignored. Without this, `podman
     // stop` waits out its timeout and then kills OBS without a chance to save.
@@ -625,6 +640,49 @@ fn clear_crash_sentinel(config_home: &Path) {
     }
 }
 
+/// Point OBS at the plugins mounted for this rental.
+///
+/// OBS reads OBS_PLUGINS_PATH and OBS_PLUGINS_DATA_PATH only as a pair. The
+/// first takes `%module%`, so OBS finds `<module>/bin/<module>.so` under the
+/// mount itself; the second has `/<module>` appended by OBS, so each module's
+/// data directory is linked under `data_links` by name. A directory that is
+/// not a plugin in that layout is skipped, and with none left nothing is set.
+fn rental_plugin_env(plugins: &Path, data_links: &Path) -> std::io::Result<Vec<(&'static str, String)>> {
+    let entries = match std::fs::read_dir(plugins) {
+        Ok(entries) => entries,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(error) => return Err(error),
+    };
+
+    let mut modules = Vec::new();
+    for entry in entries {
+        let name = entry?.file_name().to_string_lossy().into_owned();
+        let valid = !name.is_empty() && name.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_');
+        if valid && plugins.join(&name).join("bin").join(format!("{name}.so")).is_file() {
+            modules.push(name);
+        } else {
+            log(&format!("ignoring {} in the rental's plugins: not a plugin", name));
+        }
+    }
+    if modules.is_empty() {
+        return Ok(Vec::new());
+    }
+    modules.sort();
+
+    std::fs::create_dir_all(data_links)?;
+    for module in &modules {
+        let link = data_links.join(module);
+        let _ = std::fs::remove_file(&link);
+        std::os::unix::fs::symlink(plugins.join(module).join("data"), &link)?;
+    }
+
+    log(&format!("loading the rental's plugins: {}", modules.join(", ")));
+    Ok(vec![
+        ("OBS_PLUGINS_PATH", format!("{}/%module%/bin", plugins.display())),
+        ("OBS_PLUGINS_DATA_PATH", data_links.display().to_string()),
+    ])
+}
+
 /// OBS 31.0.0 as OBS packs a version: major, minor and patch in one integer.
 const OBS_31: u32 = 31 << 24;
 
@@ -748,6 +806,39 @@ mod tests {
         assert_eq!(gpu_card(&dri.join("missing")), None);
 
         std::fs::remove_dir_all(&dri).unwrap();
+    }
+
+    #[test]
+    fn points_obs_at_the_rental_plugins_and_skips_anything_else() {
+        let root = std::env::temp_dir().join(format!("runtime-init-plugins-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let plugins = root.join("plugins");
+        let links = root.join("links");
+
+        assert!(rental_plugin_env(&plugins, &links).unwrap().is_empty());
+
+        std::fs::create_dir_all(plugins.join("advanced-masks/bin")).unwrap();
+        std::fs::write(plugins.join("advanced-masks/bin/advanced-masks.so"), "").unwrap();
+        std::fs::create_dir_all(plugins.join("advanced-masks/data/locale")).unwrap();
+        std::fs::create_dir_all(plugins.join("empty/bin")).unwrap();
+        std::fs::create_dir_all(plugins.join("bad name/bin")).unwrap();
+        std::fs::write(plugins.join("bad name/bin/bad name.so"), "").unwrap();
+
+        let env = rental_plugin_env(&plugins, &links).unwrap();
+        assert_eq!(
+            env,
+            vec![
+                ("OBS_PLUGINS_PATH", format!("{}/%module%/bin", plugins.display())),
+                ("OBS_PLUGINS_DATA_PATH", links.display().to_string()),
+            ]
+        );
+        assert!(links.join("advanced-masks/locale").is_dir());
+        assert!(!links.join("empty").exists());
+
+        // Safe to run twice over the same mount.
+        assert_eq!(rental_plugin_env(&plugins, &links).unwrap(), env);
+
+        std::fs::remove_dir_all(&root).unwrap();
     }
 
     #[test]
