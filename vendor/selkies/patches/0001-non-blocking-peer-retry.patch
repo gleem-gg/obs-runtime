@@ -1,0 +1,34 @@
+Don't block the event loop while waiting for a browser peer.
+
+Both signalling error handlers wait for the browser with time.sleep(2). They
+run on the asyncio loop that also hosts the signalling server, so every retry
+froze the whole server for two seconds. The audio signaller retries for the
+whole rental (Gleem's page never registers audio peer 3), so the server was
+stalled nearly all the time: greetings took ~4 s to register and peer
+cleanup ~5 s, and a browser that reconnected inside that window was rejected
+as a duplicate peer and left on "Negotiating the video stream…"
+(gleem-gg/machine-agent#18).
+
+Applied at image build time against the installed package; see
+vendor/selkies/README.md. MPL-2.0, like the file it changes.
+
+--- a/selkies_gstreamer/__main__.py
++++ b/selkies_gstreamer/__main__.py
+@@ -537,7 +537,7 @@
+     async def on_signalling_error(e):
+        if isinstance(e, WebRTCSignallingErrorNoPeer):
+            # Waiting for peer to connect, retry in 2 seconds.
+-           time.sleep(2)
++           await asyncio.sleep(2)
+            await signalling.setup_call()
+        else:
+            logger.error("signalling error: %s", str(e))
+@@ -545,7 +545,7 @@
+     async def on_audio_signalling_error(e):
+        if isinstance(e, WebRTCSignallingErrorNoPeer):
+            # Waiting for peer to connect, retry in 2 seconds.
+-           time.sleep(2)
++           await asyncio.sleep(2)
+            await audio_signalling.setup_call()
+        else:
+            logger.error("signalling error: %s", str(e))
