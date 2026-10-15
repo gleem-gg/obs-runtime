@@ -9,6 +9,12 @@ name: Publish
 # summary into the production env and restart the worker. A moved `latest`
 # tag on its own changes nothing on any host.
 #
+# The same run publishes the `obs` build stage as
+# ghcr.io/gleem-gg/obs-runtime-sdk:<abi>, where <abi> is the key the image
+# writes to /etc/gleem/obs-abi (obs-<OBS_VERSION>-trixie). gleem-gg/obs-plugins
+# builds the plugin catalog in it, so catalog plugins link against exactly
+# the libobs rentals run.
+#
 # amd64 only. Hosts are x86 machines with an NVIDIA GPU; there is no arm64
 # NVENC path to build for.
 on:
@@ -58,6 +64,13 @@ jobs:
             org.opencontainers.image.description=Headless OBS desktop streamed to the renter's browser over WebRTC with NVENC
             org.opencontainers.image.licenses=Apache-2.0
 
+      - name: ABI key
+        id: abi
+        run: |
+          version=$(sed -n 's/^ARG OBS_VERSION=//p' Containerfile)
+          test -n "$version"
+          echo "key=obs-${version}-trixie" >> "$GITHUB_OUTPUT"
+
       - name: Build and push
         id: build
         uses: docker/build-push-action@v6
@@ -72,6 +85,25 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
+      - name: Build and push the SDK
+        if: github.ref == 'refs/heads/main'
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: Containerfile
+          target: obs
+          platforms: linux/amd64
+          push: true
+          provenance: false
+          tags: |
+            ghcr.io/gleem-gg/obs-runtime-sdk:${{ steps.abi.outputs.key }}
+            ghcr.io/gleem-gg/obs-runtime-sdk:sha-${{ github.sha }}
+          labels: |
+            org.opencontainers.image.title=Gleem OBS runtime SDK
+            org.opencontainers.image.description=The OBS build of the Gleem OBS runtime, for building plugins against
+            gg.gleem.obs-abi=${{ steps.abi.outputs.key }}
+          cache-from: type=gha
+
       - name: Record the digest
         run: |
           {
@@ -85,5 +117,6 @@ jobs:
             echo
             echo '```'
             echo "HOSTING_RUNTIME_DIGEST=${{ steps.build.outputs.digest }}"
+            echo "HOSTING_RUNTIME_OBS_ABI=${{ steps.abi.outputs.key }}"
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
